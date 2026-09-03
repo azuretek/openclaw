@@ -28,7 +28,10 @@ const CONTRACT_SCRIPT = resolve("scripts/full-release-candidate-contract.mjs");
 // CLI children must use the same clock as the fixed-expiry artifact fixtures.
 const SCRIPT_ARGS = [
   "--import",
-  `data:text/javascript,Date.now=()=>${NOW}`,
+  `data:text/javascript,${encodeURIComponent(`const realNow = Date.now.bind(Date);
+const realStart = realNow();
+Date.now = () => ${NOW} + (realNow() - realStart);
+`)}`,
   resolve("scripts/full-release-candidate-reuse.mjs"),
 ];
 const WORKFLOW_PATH = ".github/workflows/full-release-validation.yml";
