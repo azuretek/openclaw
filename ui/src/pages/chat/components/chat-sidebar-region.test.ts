@@ -147,6 +147,8 @@ describe("chat sidebar region", () => {
         desktopRefreshOnPresentation: false,
         desktopAvailable: false,
         desktopSource: null,
+        desktopFocusHref: "",
+        onDesktopFocusTargetChange: vi.fn(),
         dashboard: nothing,
         workspace: html`<div data-panel="workspace">Workspace panel</div>`,
         tasks: nothing,
