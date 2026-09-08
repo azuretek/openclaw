@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 const lanceMocks = vi.hoisted(() => ({
@@ -80,7 +81,7 @@ describe("MemoryDB delete receipts", () => {
   );
 
   test("pending initialization callers share one table opening without extra refresh", async () => {
-    const schema = Promise.withResolvers<{ fields: { name: string }[] }>();
+    const schema = createDeferred<{ fields: { name: string }[] }>();
     lanceMocks.schema.mockReturnValueOnce(schema.promise);
     const db = new MemoryDB("/unused", 3);
     try {
