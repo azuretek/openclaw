@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import {
   cleanSchemaForGemini,
   cleanSchemaForLlamacppGbnf,
@@ -293,6 +294,31 @@ function normalizeDeepSeekSchema(schema: unknown): unknown {
     return merged;
   }
 
+  // DeepSeek rejects `anyOf`/`oneOf` outright, so a union has to be rewritten
+  // into a single schema. Taking one variant is right for scalars, but for a
+  // union of object schemas it silently narrows the tool: the model can no
+  // longer express any branch but the first, and our own argument validator
+  // then rejects calls the server would have accepted. Notion's create-pages
+  // `parent` is this shape (page_id | database_id | data_source_id), which left
+  // the tool unable to create a database row at all.
+  // https://github.com/openclaw/openclaw/issues/143790
+  if (
+    nonNullVariants.length > 1 &&
+    nonNullVariants.every((entry) => isObjectSchemaVariant(entry))
+  ) {
+    const flattenedVariants = flattenObjectVariants(nonNullVariants as Record<string, unknown>[]);
+    if (flattenedVariants) {
+      const merged: Record<string, unknown> = {
+        ...flattenedVariants,
+        ...normalized,
+      };
+      if (hasNullVariant) {
+        merged.nullable = true;
+      }
+      return merged;
+    }
+  }
+
   const selected = nonNullVariants[0] ?? normalizedVariants[0];
   if (!selected || typeof selected !== "object" || Array.isArray(selected)) {
     return normalized;
@@ -314,6 +340,105 @@ function isStringConstVariant(entry: unknown): entry is { const: string } {
   }
   const record = entry as Record<string, unknown>;
   return typeof record.const === "string";
+}
+
+function isObjectSchemaVariant(entry: unknown): entry is Record<string, unknown> {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    return false;
+  }
+  return (entry as Record<string, unknown>).type === "object";
+}
+
+/**
+ * Flattens a union of object schemas into one object schema, keeping every
+ * branch expressible: the union of the variants' properties, and the
+ * intersection of their `required` lists.
+ *
+ * A property that discriminates the variants differs only by its literals
+ * (`type: { enum: ["page_id"] }` in one variant, `["database_id"]` in another),
+ * so its values are pooled into a single enum. Without that pooling the
+ * flattened schema would still pin the discriminator to the first variant and
+ * the tool would stay unusable for the others.
+ *
+ * Returns undefined when the variants cannot be flattened, so the caller keeps
+ * the previous single-variant behaviour rather than emitting something wrong.
+ * This mirrors `flattenUnionSchema` on the MCP loopback path.
+ */
+function flattenObjectVariants(
+  variants: Record<string, unknown>[],
+): Record<string, unknown> | undefined {
+  const properties: Record<string, unknown> = {};
+  let required: string[] | undefined;
+  for (const variant of variants) {
+    const variantProperties = variant.properties;
+    if (
+      !variantProperties ||
+      typeof variantProperties !== "object" ||
+      Array.isArray(variantProperties)
+    ) {
+      return undefined;
+    }
+    for (const [key, value] of Object.entries(variantProperties)) {
+      const existing = properties[key];
+      if (existing === undefined) {
+        properties[key] = value;
+        continue;
+      }
+      if (isDeepStrictEqual(existing, value)) {
+        continue;
+      }
+      const pooled = poolLiteralEnum(existing, value);
+      if (pooled) {
+        properties[key] = pooled;
+      }
+      // Otherwise keep the first definition. Widening it would mean putting a
+      // union keyword back, which is the one thing DeepSeek will not accept.
+    }
+    const variantRequired = Array.isArray(variant.required)
+      ? variant.required.filter((key): key is string => typeof key === "string")
+      : [];
+    required =
+      required === undefined
+        ? variantRequired
+        : required.filter((key) => variantRequired.includes(key));
+  }
+  const flattened: Record<string, unknown> = { type: "object", properties };
+  if (required && required.length > 0) {
+    flattened.required = required;
+  }
+  return flattened;
+}
+
+/** Pools the values of two property schemas that differ only by their literals. */
+function poolLiteralEnum(left: unknown, right: unknown): Record<string, unknown> | undefined {
+  if (!isSchemaRecord(left) || !isSchemaRecord(right)) {
+    return undefined;
+  }
+  const leftValues = Array.isArray(left.enum) ? left.enum : undefined;
+  const rightValues = Array.isArray(right.enum) ? right.enum : undefined;
+  if (!leftValues || !rightValues) {
+    return undefined;
+  }
+  const leftRest = withoutEnumKeyword(left);
+  if (!isDeepStrictEqual(leftRest, withoutEnumKeyword(right))) {
+    return undefined;
+  }
+  const values = [...new Set([...leftValues, ...rightValues])];
+  return values.length > 0 ? { ...leftRest, enum: values } : undefined;
+}
+
+function isSchemaRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function withoutEnumKeyword(schema: Record<string, unknown>): Record<string, unknown> {
+  const rest: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(schema)) {
+    if (key !== "enum") {
+      rest[key] = value;
+    }
+  }
+  return rest;
 }
 
 /**
