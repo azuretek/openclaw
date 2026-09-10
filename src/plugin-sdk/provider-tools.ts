@@ -385,7 +385,8 @@ const SCHEMA_ANNOTATION_KEYS = new Set([
 function flattenObjectVariants(
   variants: Record<string, unknown>[],
 ): Record<string, unknown> | undefined {
-  const properties: Record<string, unknown> = {};
+  // SAFETY: Object.create(null) is typed as any; every key written below is a schema keyword string.
+  const properties: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
   let required: string[] | undefined;
   for (const variant of variants) {
     const variantProperties = variant.properties;
@@ -423,17 +424,12 @@ function flattenObjectVariants(
         ? variantRequired
         : required.filter((key) => variantRequired.includes(key));
   }
-  // A variant that does not declare a key still accepts it when that variant
-  // allows additional properties, so constraining such a key would reject calls
-  // the variant accepted. Keep what documents it and drop what constrains it.
+  // A variant that does not declare a key can still accept it, either by
+  // allowing additional properties or through a `patternProperties` pattern.
+  // Constraining such a key would reject calls the variant accepted, so keep
+  // what documents it and drop what constrains it.
   for (const key of Object.keys(properties)) {
-    const acceptedWithoutDeclaring = variants.some(
-      (variant) =>
-        variant.additionalProperties !== false &&
-        // SAFETY: the guard earlier in this function proved variant.properties is a non-null non-array object.
-        !Object.hasOwn(variant.properties as Record<string, unknown>, key),
-    );
-    if (acceptedWithoutDeclaring) {
+    if (variants.some((variant) => acceptsUndeclaredKey(variant, key))) {
       properties[key] = schemaAnnotationsOnly(properties[key]);
     }
   }
@@ -442,6 +438,41 @@ function flattenObjectVariants(
     flattened.required = required;
   }
   return flattened;
+}
+
+/**
+ * Whether a variant accepts a key it does not declare.
+ *
+ * `additionalProperties` only constrains keys that no `properties` entry and no
+ * `patternProperties` pattern covers, so a pattern match widens acceptance even
+ * when `additionalProperties` is false. Ignoring that would copy another
+ * variant's constraint onto a key this variant accepted.
+ */
+function acceptsUndeclaredKey(variant: Record<string, unknown>, key: string): boolean {
+  const declared = variant.properties;
+  if (isSchemaRecord(declared) && Object.hasOwn(declared, key)) {
+    return false;
+  }
+  if (variant.additionalProperties !== false) {
+    return true;
+  }
+  return matchesPatternProperty(variant.patternProperties, key);
+}
+
+/** Whether a variant's `patternProperties` covers the key. */
+function matchesPatternProperty(patternProperties: unknown, key: string): boolean {
+  if (!isSchemaRecord(patternProperties)) {
+    return false;
+  }
+  return Object.keys(patternProperties).some((pattern) => {
+    try {
+      return new RegExp(pattern).test(key);
+    } catch {
+      // An uncompilable pattern covers nothing, so it cannot widen acceptance
+      // and must not make the merge throw.
+      return false;
+    }
+  });
 }
 
 /** Keeps only the keys that document a property, dropping every constraint. */

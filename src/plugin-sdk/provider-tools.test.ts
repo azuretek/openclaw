@@ -468,6 +468,94 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     expect(parameters.properties.options.required).toEqual(["constructor"]);
   });
 
+  it("does not narrow a key a variant accepts through patternProperties", () => {
+    // Review finding on #143819: `additionalProperties: false` does not make a
+    // variant reject an undeclared key that its `patternProperties` cover.
+    // Branch A accepts an object-valued `b` that way, and branch B declares `b`
+    // as a string. Copying B's constraint would reject a call A accepted.
+    const hooks = buildProviderToolCompatFamilyHooks("deepseek");
+    const tools = [
+      tool(
+        objectSchema({
+          parent: {
+            anyOf: [
+              {
+                type: "object",
+                properties: { a: { type: "string" } },
+                required: ["a"],
+                additionalProperties: false,
+                patternProperties: { "^b$": { type: "object" } },
+              },
+              {
+                type: "object",
+                properties: { b: { type: "string" } },
+                required: ["b"],
+                additionalProperties: false,
+              },
+            ],
+          },
+        }),
+        "patterned-variant",
+      ),
+    ];
+
+    const normalized = hooks.normalizeToolSchemas(deepSeekContext(tools));
+    const parameters = normalized[0]?.parameters as {
+      properties: { parent: { properties: Record<string, unknown> } };
+    };
+    const props = parameters.properties.parent.properties;
+
+    // A key the pattern covers stays unconstrained, while a declared key keeps
+    // its own definition.
+    expect(props["b"]).toEqual({});
+    expect(props["a"]).toEqual({ type: "string" });
+
+    const validate = (args: Record<string, unknown>) =>
+      validateToolArguments(normalized[0] as never, {
+        type: "toolCall",
+        id: "call-patterned-variant",
+        name: "patterned-variant",
+        arguments: args,
+      });
+
+    // Accepted by branch A before this change, so it must stay accepted.
+    expect(() => validate({ parent: { a: "x", b: { nested: true } } })).not.toThrow();
+    // And the branch that declares `b` is still callable.
+    expect(() => validate({ parent: { b: "y" } })).not.toThrow();
+  });
+
+  it("keeps an own __proto__ property through accumulation and serialization", () => {
+    // Review finding on #143819: writing `properties["__proto__"]` on a plain
+    // object runs the inherited setter, so the definition was lost while the
+    // name could stay in `required`. The accumulator is prototype-free now, and
+    // the definition has to survive into the serialized provider schema.
+    const hooks = buildProviderToolCompatFamilyHooks("deepseek");
+    const branch = (description: string) =>
+      JSON.parse(
+        `{"type":"object","properties":{"__proto__":{"type":"string","description":"${description}"}},"required":["__proto__"]}`,
+      ) as Record<string, unknown>;
+    const tools = [
+      tool(
+        objectSchema({
+          options: { anyOf: [branch("first"), branch("second")] },
+        }),
+        "proto-keys",
+      ),
+    ];
+
+    const normalized = hooks.normalizeToolSchemas(deepSeekContext(tools));
+    const parameters = normalized[0]?.parameters as {
+      properties: { options: { properties: Record<string, unknown>; required?: string[] } };
+    };
+    const props = parameters.properties.options.properties;
+
+    const protoKey = "__proto__";
+    expect(Object.hasOwn(props, protoKey)).toBe(true);
+    expect(props[protoKey]).toEqual({ type: "string", description: "first" });
+    expect(parameters.properties.options.required).toEqual([protoKey]);
+    expect(JSON.stringify(parameters)).toContain('"__proto__"');
+  });
+
   it("falls back when object variants cannot be flattened into one schema", () => {
     // A union that mixes an object with a scalar, or whose variants disagree
     // about a property's shape, cannot be represented as a single object
