@@ -462,8 +462,9 @@ describe("buildProviderToolCompatFamilyHooks", () => {
       };
     };
 
-    expect(parameters.properties.options.properties.constructor).toEqual({ type: "string" });
-    expect(parameters.properties.options.properties.toString).toEqual({ type: "string" });
+    const props = parameters.properties.options.properties;
+    expect(props["constructor"]).toEqual({ type: "string" });
+    expect(props["toString"]).toEqual({ type: "string" });
     expect(parameters.properties.options.required).toEqual(["constructor"]);
   });
 
