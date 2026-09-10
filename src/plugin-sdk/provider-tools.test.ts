@@ -1,3 +1,4 @@
+import { validateToolArguments } from "@openclaw/llm-core/validation";
 // Provider tool tests cover tool schema conversion and provider payload compatibility.
 import { describe, expect, it } from "vitest";
 import { findSourceImportBackedges } from "../../test/helpers/source-import-closure.js";
@@ -349,14 +350,18 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     };
 
     // Every branch stays expressible, and the discriminator pools its values so
-    // the model can name any of them.
+    // the model can name any of them. The per-branch keys stay unconstrained:
+    // each is declared by one variant and permitted by the others through
+    // `additionalProperties`, so constraining one would reject a call those
+    // variants accepted. The live Notion schema documents each of them, and any
+    // annotation survives here.
     expect(parameters.properties.parent).toEqual({
       description: "The parent under which the new pages will be created.",
       type: "object",
       properties: {
-        page_id: { type: "string" },
-        database_id: { type: "string" },
-        data_source_id: { type: "string" },
+        page_id: {},
+        database_id: {},
+        data_source_id: {},
         type: { type: "string", enum: ["page_id", "database_id", "data_source_id"] },
       },
     });
@@ -365,6 +370,101 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     expect(parameters.required).toEqual(["pages"]);
     // The provider still sees no union keyword.
     expect(hooks.inspectToolSchemas(deepSeekContext(normalized as never))).toStrictEqual([]);
+  });
+
+  it("does not narrow a key that an open variant accepts without declaring", () => {
+    // Review finding on #143819: taking a property from a later variant can
+    // narrow the first one. Branch A permits arbitrary extras through
+    // `additionalProperties` and accepts `{a: "x", b: {nested: true}}`; branch B
+    // declares `b` as a string. Imposing that constraint would reject a call the
+    // first variant accepted, so the key has to stay unconstrained, and the
+    // assertion runs through the real argument validator rather than the shape.
+    const hooks = buildProviderToolCompatFamilyHooks("deepseek");
+    const tools = [
+      tool(
+        objectSchema({
+          parent: {
+            anyOf: [
+              {
+                type: "object",
+                properties: { a: { type: "string" } },
+                required: ["a"],
+                additionalProperties: {},
+              },
+              {
+                type: "object",
+                properties: { b: { type: "string" } },
+                required: ["b"],
+              },
+            ],
+          },
+        }),
+        "open-variant",
+      ),
+    ];
+
+    const normalized = hooks.normalizeToolSchemas(deepSeekContext(tools));
+    const validate = (args: Record<string, unknown>) =>
+      validateToolArguments(normalized[0] as never, {
+        type: "toolCall",
+        id: "call-open-variant",
+        name: "open-variant",
+        arguments: args,
+      });
+
+    // Accepted by branch A before this change, so it must stay accepted.
+    expect(() => validate({ parent: { a: "x", b: { nested: true } } })).not.toThrow();
+    // And the variant that first-variant selection made unreachable is callable.
+    expect(() => validate({ parent: { b: "y" } })).not.toThrow();
+  });
+
+  it("keeps a property whose name collides with Object.prototype", () => {
+    // Review finding on #143819: the accumulator was a plain object, so reading
+    // `properties["constructor"]` returned the inherited function, enum pooling
+    // failed, and the real definition was dropped while the name stayed in
+    // `required`. Both variants are closed here, so nothing is relaxed and the
+    // assertions are purely about own-property accumulation.
+    const hooks = buildProviderToolCompatFamilyHooks("deepseek");
+    const tools = [
+      tool(
+        objectSchema({
+          options: {
+            anyOf: [
+              {
+                type: "object",
+                properties: {
+                  constructor: { type: "string" },
+                  toString: { type: "string" },
+                },
+                required: ["constructor", "toString"],
+                additionalProperties: false,
+              },
+              {
+                type: "object",
+                properties: {
+                  constructor: { type: "string" },
+                  toString: { type: "string" },
+                },
+                required: ["constructor"],
+                additionalProperties: false,
+              },
+            ],
+          },
+        }),
+        "prototype-keys",
+      ),
+    ];
+
+    const normalized = hooks.normalizeToolSchemas(deepSeekContext(tools));
+    const parameters = normalized[0]?.parameters as {
+      properties: {
+        options: { properties: Record<string, unknown>; required?: string[] };
+      };
+    };
+
+    expect(parameters.properties.options.properties.constructor).toEqual({ type: "string" });
+    expect(parameters.properties.options.properties.toString).toEqual({ type: "string" });
+    expect(parameters.properties.options.required).toEqual(["constructor"]);
   });
 
   it("falls back when object variants cannot be flattened into one schema", () => {

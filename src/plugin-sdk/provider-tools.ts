@@ -350,6 +350,22 @@ function isObjectSchemaVariant(entry: unknown): entry is Record<string, unknown>
 }
 
 /**
+ * Keys that only document a schema. Everything else is a constraint, so this is
+ * what survives when a property has to stay unconstrained.
+ */
+const SCHEMA_ANNOTATION_KEYS = new Set([
+  "$comment",
+  "default",
+  "deprecated",
+  "description",
+  "example",
+  "examples",
+  "readOnly",
+  "title",
+  "writeOnly",
+]);
+
+/**
  * Flattens a union of object schemas into one object schema, keeping every
  * branch expressible: the union of the variants' properties, and the
  * intersection of their `required` lists.
@@ -379,11 +395,14 @@ function flattenObjectVariants(
       return undefined;
     }
     for (const [key, value] of Object.entries(variantProperties)) {
-      const existing = properties[key];
-      if (existing === undefined) {
+      // Own-property membership, not a prototype-chain read: a key named
+      // `constructor` or `toString` would otherwise look already present and
+      // its real definition would be dropped.
+      if (!Object.hasOwn(properties, key)) {
         properties[key] = value;
         continue;
       }
+      const existing = properties[key];
       if (isDeepStrictEqual(existing, value)) {
         continue;
       }
@@ -402,11 +421,38 @@ function flattenObjectVariants(
         ? variantRequired
         : required.filter((key) => variantRequired.includes(key));
   }
+  // A variant that does not declare a key still accepts it when that variant
+  // allows additional properties, so constraining such a key would reject calls
+  // the variant accepted. Keep what documents it and drop what constrains it.
+  for (const key of Object.keys(properties)) {
+    const acceptedWithoutDeclaring = variants.some(
+      (variant) =>
+        variant.additionalProperties !== false &&
+        !Object.hasOwn(variant.properties as Record<string, unknown>, key),
+    );
+    if (acceptedWithoutDeclaring) {
+      properties[key] = schemaAnnotationsOnly(properties[key]);
+    }
+  }
   const flattened: Record<string, unknown> = { type: "object", properties };
   if (required && required.length > 0) {
     flattened.required = required;
   }
   return flattened;
+}
+
+/** Keeps only the keys that document a property, dropping every constraint. */
+function schemaAnnotationsOnly(schema: unknown): Record<string, unknown> {
+  if (!isSchemaRecord(schema)) {
+    return {};
+  }
+  const annotations: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(schema)) {
+    if (SCHEMA_ANNOTATION_KEYS.has(key)) {
+      annotations[key] = value;
+    }
+  }
+  return annotations;
 }
 
 /** Pools the values of two property schemas that differ only by their literals. */
