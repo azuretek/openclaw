@@ -231,7 +231,7 @@ describe("buildProviderToolCompatFamilyHooks", () => {
   });
 
   it("preserves string-const unions as a flat enum for the deepseek family", () => {
-    // Regression for https://github.com/openclaw/openclaw/issues/86468 —
+    // Regression for https://github.com/openclaw/openclaw/issues/86468.
     // Typebox `Type.Union([Type.Literal(...)])` collapses to anyOf of consts;
     // the previous normalizer kept only the first const, hiding every other
     // literal from the model.
@@ -292,7 +292,7 @@ describe("buildProviderToolCompatFamilyHooks", () => {
   });
 
   it("keeps every object variant of a union expressible for the deepseek family", () => {
-    // Regression for https://github.com/openclaw/openclaw/issues/143790 —
+    // Regression for https://github.com/openclaw/openclaw/issues/143790.
     // Notion's create-pages `parent` is an anyOf of three object variants.
     // Keeping only the first variant narrowed the schema to `page_id`, so the
     // model could not express a database or data-source parent and every such
