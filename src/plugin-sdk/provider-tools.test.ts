@@ -290,6 +290,114 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     expect(hooks.inspectToolSchemas(deepSeekContext(normalized as never))).toStrictEqual([]);
   });
 
+  it("keeps every object variant of a union expressible for the deepseek family", () => {
+    // Regression for https://github.com/openclaw/openclaw/issues/143790 —
+    // Notion's create-pages `parent` is an anyOf of three object variants.
+    // Keeping only the first variant narrowed the schema to `page_id`, so the
+    // model could not express a database or data-source parent and every such
+    // call was rejected by our own argument validator before it reached the
+    // server.
+    const hooks = buildProviderToolCompatFamilyHooks("deepseek");
+    const tools = [
+      tool(
+        objectSchema(
+          {
+            pages: { type: "array", items: { type: "object" } },
+            parent: {
+              description: "The parent under which the new pages will be created.",
+              anyOf: [
+                {
+                  type: "object",
+                  properties: {
+                    page_id: { type: "string" },
+                    type: { type: "string", enum: ["page_id"] },
+                  },
+                  required: ["page_id"],
+                  additionalProperties: {},
+                },
+                {
+                  type: "object",
+                  properties: {
+                    database_id: { type: "string" },
+                    type: { type: "string", enum: ["database_id"] },
+                  },
+                  required: ["database_id"],
+                  additionalProperties: {},
+                },
+                {
+                  type: "object",
+                  properties: {
+                    data_source_id: { type: "string" },
+                    type: { type: "string", enum: ["data_source_id"] },
+                  },
+                  required: ["data_source_id"],
+                  additionalProperties: {},
+                },
+              ],
+            },
+          },
+          { required: ["pages"] },
+        ),
+        "notion__notion-create-pages",
+      ),
+    ];
+
+    const normalized = hooks.normalizeToolSchemas(deepSeekContext(tools));
+    const parameters = normalized[0]?.parameters as {
+      properties: Record<string, unknown>;
+      required?: string[];
+    };
+
+    // Every branch stays expressible, and the discriminator pools its values so
+    // the model can name any of them.
+    expect(parameters.properties.parent).toEqual({
+      description: "The parent under which the new pages will be created.",
+      type: "object",
+      properties: {
+        page_id: { type: "string" },
+        database_id: { type: "string" },
+        data_source_id: { type: "string" },
+        type: { type: "string", enum: ["page_id", "database_id", "data_source_id"] },
+      },
+    });
+    // No branch's key is required any more, because no key is required by all
+    // of them. The root's own `required` is untouched.
+    expect(parameters.required).toEqual(["pages"]);
+    // The provider still sees no union keyword.
+    expect(hooks.inspectToolSchemas(deepSeekContext(normalized as never))).toStrictEqual([]);
+  });
+
+  it("falls back when object variants cannot be flattened into one schema", () => {
+    // A union that mixes an object with a scalar, or whose variants disagree
+    // about a property's shape, cannot be represented as a single object
+    // schema. Those keep the previous behaviour rather than a guess, so the
+    // flattening above stays narrow.
+    const hooks = buildProviderToolCompatFamilyHooks("deepseek");
+    const tools = [
+      tool(
+        objectSchema({
+          mixed: {
+            anyOf: [
+              { type: "object", properties: { a: { type: "string" } }, required: ["a"] },
+              { type: "string" },
+            ],
+          },
+        }),
+        "mixed-union",
+      ),
+    ];
+
+    const normalized = hooks.normalizeToolSchemas(deepSeekContext(tools));
+    const parameters = normalized[0]?.parameters as { properties: Record<string, unknown> };
+
+    expect(parameters.properties.mixed).toEqual({
+      type: "object",
+      properties: { a: { type: "string" } },
+      required: ["a"],
+    });
+    expect(hooks.inspectToolSchemas(deepSeekContext(normalized as never))).toStrictEqual([]);
+  });
+
   it("normalizes parameter-free and typed-object schemas for the openai family", () => {
     const tools = [tool({}, "ping"), tool({ type: "object" }, "exec")];
     const normalized = normalizeOpenAITools(tools);
