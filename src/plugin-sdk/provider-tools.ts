@@ -306,6 +306,7 @@ function normalizeDeepSeekSchema(schema: unknown): unknown {
     nonNullVariants.length > 1 &&
     nonNullVariants.every((entry) => isObjectSchemaVariant(entry))
   ) {
+    // SAFETY: isObjectSchemaVariant accepted each entry above, which is true only of a non-null non-array object.
     const flattenedVariants = flattenObjectVariants(nonNullVariants as Record<string, unknown>[]);
     if (flattenedVariants) {
       const merged: Record<string, unknown> = {
@@ -346,6 +347,7 @@ function isObjectSchemaVariant(entry: unknown): entry is Record<string, unknown>
   if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
     return false;
   }
+  // SAFETY: the guard above rejected null, non-object and array values, so this is a plain schema record.
   return (entry as Record<string, unknown>).type === "object";
 }
 
@@ -428,6 +430,7 @@ function flattenObjectVariants(
     const acceptedWithoutDeclaring = variants.some(
       (variant) =>
         variant.additionalProperties !== false &&
+        // SAFETY: the guard earlier in this function proved variant.properties is a non-null non-array object.
         !Object.hasOwn(variant.properties as Record<string, unknown>, key),
     );
     if (acceptedWithoutDeclaring) {
