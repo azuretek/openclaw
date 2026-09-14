@@ -32,6 +32,8 @@ export type TransportDropScenario = {
   pluginHarnessOwnsTransport?: boolean;
   retryAvailable?: boolean;
   replaySafe?: boolean;
+  fallbackConfigured?: boolean;
+  providerRetryMaxDelayMs?: number;
   terminal?: Parameters<typeof makeEmbeddedRunnerAttempt>[0]["terminal"];
   usage?: AssistantMessage["usage"];
   terminate?: boolean;
@@ -113,6 +115,9 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
     ...(scenario.replaySafe
       ? { currentAttemptReplayMetadata: { replaySafe: true, hadPotentialSideEffects: false } }
       : {}),
+    ...(scenario.providerRetryMaxDelayMs !== undefined
+      ? { providerRetryMaxDelayMs: scenario.providerRetryMaxDelayMs }
+      : {}),
   });
   const terminalState = resolveEmbeddedRunAttemptTerminalState({
     attempt,
@@ -129,7 +134,7 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
     modelId: "gpt-5.6-luna",
     globalLane: "test",
     agentDir: "/tmp/provider-recovery-test",
-    fallbackConfigured: false,
+    fallbackConfigured: scenario.fallbackConfigured ?? false,
     profileFailureStore: { version: 1, profiles: {} },
     getLastProfileId: () => undefined,
     getSessionId: () => "session:transport-drop",
