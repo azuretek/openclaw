@@ -542,6 +542,18 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
               >`
             : nothing
         }
+        <!-- Settings otherwise hides one level down in the identity menu, which
+             costs two taps on a phone; the footer strip keeps it one tap away. -->
+        <openclaw-tooltip .content=${t("nav.settings")}
+          ><button
+            type="button"
+            class="sidebar-brand__icon sidebar-footer-bar__settings"
+            aria-label=${t("nav.settings")}
+            @click=${() => host.onNavigate?.("appearance")}
+          >
+            ${icons.settings}
+          </button></openclaw-tooltip
+        >
         ${renderAppSidebarAttention(host)}
       </span>
     </div>

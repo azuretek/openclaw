@@ -5,6 +5,7 @@ import { readStyleSheet } from "../../../test/helpers/ui-style-fixtures.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import {
   createGateway,
+  createGatewayHarness,
   createSessions,
   mountSidebar,
   setupSidebarTest,
@@ -14,6 +15,10 @@ import {
   canRunPlaywrightChromium,
   resolvePlaywrightChromiumExecutablePath,
 } from "../test-helpers/control-ui-e2e.ts";
+import {
+  gatewayHelloForMethods,
+  SESSION_MUTATION_TEST_METHODS,
+} from "../test-helpers/gateway-methods.ts";
 import {
   clearNativeGatewayTestState,
   setNativeGatewayTestState,
@@ -212,4 +217,148 @@ describeBrowserLayout("sidebar footer layout", () => {
       clearNativeGatewayTestState();
     }
   });
+});
+
+// The footer strip is shared chrome on every route, so a third action has to fit
+// the narrowest sidebar the resizer allows without pushing the identity card
+// underneath it. Measured on the real rendered footer at three widths.
+const SIDEBAR_MIN_WIDTH = 240;
+const FOOTER_ACTION_WIDTHS = [SIDEBAR_MIN_WIDTH, 288, 390] as const;
+/** WCAG 2.5.8 (Target Size Minimum) floor for a pointer target. */
+const MIN_TOUCH_TARGET = 24;
+const FOOTER_EDGE_INSET = 8;
+
+/** Where the three footer actions should land once measured left to right. */
+const FOOTER_ACTION_ORDER = [
+  "sidebar-brand__icon sidebar-footer-bar__home",
+  "sidebar-brand__icon sidebar-footer-bar__settings",
+  "sidebar-issues-button",
+] as const;
+
+describeBrowserLayout("sidebar footer action strip", () => {
+  setupSidebarTest();
+  let stripPage: Page | null = null;
+  let footerMarkup: string | null = null;
+
+  async function openStripPage(): Promise<Page> {
+    stripPage ??= await browser.newPage({ viewport: { width: 800, height: 400 } });
+    return stripPage;
+  }
+
+  async function readFooterMarkup(): Promise<string> {
+    if (footerMarkup !== null) {
+      return footerMarkup;
+    }
+    const harness = createGatewayHarness({} as GatewayBrowserClient);
+    // Home renders only for a Gateway advertising what the home panel calls.
+    harness.publish({
+      hello: gatewayHelloForMethods([
+        ...SESSION_MUTATION_TEST_METHODS,
+        "chat.history",
+        "chat.send",
+      ]),
+    });
+    const { sidebar } = await mountSidebar(
+      harness.gateway,
+      createSessions("main", ["agent:main:main"]),
+    );
+    sidebar.connected = true;
+    await sidebar.updateComplete;
+    const markup = sidebar.querySelector<HTMLElement>(".sidebar-footer-bar")?.outerHTML ?? "";
+    expect(markup).toContain("sidebar-footer-bar__settings");
+    // The shared sidebar harness keeps the inbox widget inert, so supply its
+    // inner button here; production renders the same light-DOM shape.
+    footerMarkup = markup.replace(
+      "</openclaw-sidebar-attention>",
+      '<button class="sidebar-issues-button" type="button"></button></openclaw-sidebar-attention>',
+    );
+    return footerMarkup;
+  }
+
+  afterAll(async () => {
+    await stripPage?.close().catch(() => {});
+  });
+
+  it.each(FOOTER_ACTION_WIDTHS)(
+    "keeps the three footer actions clear of the identity card at %ipx",
+    async (width) => {
+      const measure = await openStripPage();
+      await measure.setContent(`
+        <!doctype html>
+        <html data-theme-mode="light">
+          <head>
+            <style>${readUiCss()}</style>
+            <style>
+              .footer-strip-fixture {
+                display: flex;
+                width: ${width}px;
+                height: 220px;
+              }
+              .footer-strip-fixture > * {
+                width: 100%;
+                min-height: 0;
+              }
+            </style>
+          </head>
+          <body>
+            <main class="shell footer-strip-fixture">
+              <section class="sidebar-shell">
+                <div class="sidebar-shell__content"></div>
+                <div class="sidebar-shell__footer">${await readFooterMarkup()}</div>
+              </section>
+            </main>
+          </body>
+        </html>
+      `);
+
+      const geometry = await measure.evaluate(() => {
+        const box = (selector: string) => {
+          const element = document.querySelector(selector);
+          if (!element) {
+            return null;
+          }
+          const { top, bottom, left, right, width, height } = element.getBoundingClientRect();
+          return { top, bottom, left, right, width, height };
+        };
+        const bar = document.querySelector<HTMLElement>(".sidebar-footer-bar");
+        return {
+          bar: box(".sidebar-footer-bar"),
+          card: box(".sidebar-identity-card"),
+          actions: box(".sidebar-footer-actions"),
+          buttons: Array.from(
+            document.querySelectorAll<HTMLElement>(".sidebar-footer-actions button"),
+          ).map((button) => {
+            const { top, bottom, left, width, height } = button.getBoundingClientRect();
+            return { top, bottom, left, width, height, className: button.className };
+          }),
+          overflowX: bar ? bar.scrollWidth - bar.clientWidth : Number.NaN,
+        };
+      });
+
+      expect(geometry.bar).not.toBeNull();
+      expect(geometry.card).not.toBeNull();
+      expect(geometry.actions).not.toBeNull();
+      const ordered = [...geometry.buttons].sort((a, b) => a.left - b.left);
+      expect(ordered.map((button) => button.className)).toEqual([...FOOTER_ACTION_ORDER]);
+      const home = ordered[0]!;
+      const settings = ordered[1]!;
+      const inbox = ordered[2]!;
+      // Settings carries the Home affordance's own box, not a narrower one.
+      expect(settings.width).toBe(home.width);
+      expect(settings.height).toBe(home.height);
+      for (const button of ordered) {
+        // Touch targets clear the 24px WCAG 2.5.8 floor at every width.
+        expect(button.width).toBeGreaterThanOrEqual(MIN_TOUCH_TARGET);
+        expect(button.height).toBeGreaterThanOrEqual(MIN_TOUCH_TARGET);
+        expect(button.top).toBeGreaterThanOrEqual(geometry.bar!.top);
+        expect(button.bottom).toBeLessThanOrEqual(geometry.bar!.bottom);
+      }
+      // The strip stays on the sidebar edge, and the card stops before it.
+      expect(geometry.bar!.right - geometry.actions!.right).toBeCloseTo(FOOTER_EDGE_INSET, 2);
+      expect(geometry.card!.right).toBeLessThanOrEqual(geometry.actions!.left);
+      expect(settings.left).toBeGreaterThanOrEqual(home.left);
+      expect(inbox.left).toBeGreaterThanOrEqual(settings.left);
+      expect(geometry.overflowX).toBeLessThanOrEqual(0);
+    },
+  );
 });

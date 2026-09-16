@@ -3760,8 +3760,15 @@ a:is(
   padding-inline-end: 44px;
 }
 
-.sidebar-footer-bar:has(.sidebar-footer-bar__home) {
+.sidebar-footer-bar:has(.sidebar-footer-bar__home),
+.sidebar-footer-bar:has(.sidebar-footer-bar__settings) {
   padding-inline-end: 84px;
+}
+
+/* Home plus Settings plus the inbox: the identity card must stay clear of all
+   three 32px slots, not just the two the older rule reserved. */
+.sidebar-footer-bar:has(.sidebar-footer-bar__home):has(.sidebar-footer-bar__settings) {
+  padding-inline-end: 124px;
 }
 
 .sidebar-footer-actions {

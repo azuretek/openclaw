@@ -9,6 +9,7 @@ import "../test-helpers/app-sidebar-cases/roster.ts";
 import "../test-helpers/app-sidebar-cases/attention.ts";
 import "../test-helpers/app-sidebar-cases/attention-details.ts";
 import "../test-helpers/app-sidebar-cases/basics.ts";
+import "../test-helpers/app-sidebar-cases/footer-actions.ts";
 import "../test-helpers/app-sidebar-cases/footer-status.ts";
 import "../test-helpers/app-sidebar-cases/catalog-compat.ts";
 import "../test-helpers/app-sidebar-cases/catalog-live-events.ts";
