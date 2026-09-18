@@ -6,6 +6,7 @@ import {
 } from "../../../../packages/gateway-protocol/src/client-info.js";
 import type { ConnectParams } from "../../../../packages/gateway-protocol/src/index.js";
 import { verifyDeviceSignature } from "../../../infra/device-identity.js";
+import { isNativeAppUiClient } from "../../../utils/message-channel.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult } from "../../auth.js";
 import { buildDeviceAuthPayload, buildDeviceAuthPayloadV3 } from "../../device-auth.js";
@@ -34,15 +35,7 @@ type HandshakeBrowserSecurityContext = {
   authRateLimiter?: AuthRateLimiter;
 };
 
-export function isNativeAppUiClient(client: ConnectParams["client"]): boolean {
-  return (
-    client.mode === GATEWAY_CLIENT_MODES.UI &&
-    (client.id === GATEWAY_CLIENT_IDS.MACOS_APP ||
-      client.id === GATEWAY_CLIENT_IDS.LINUX_APP ||
-      client.id === GATEWAY_CLIENT_IDS.IOS_APP ||
-      client.id === GATEWAY_CLIENT_IDS.ANDROID_APP)
-  );
-}
+export { isNativeAppUiClient } from "../../../utils/message-channel.js";
 
 function resolveBrowserOriginRateLimitKey(requestOrigin?: string): string {
   const trimmedOrigin = requestOrigin?.trim();
