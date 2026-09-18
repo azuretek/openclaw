@@ -75,6 +75,59 @@ function markButtonReloading(button: HTMLButtonElement | null): () => void {
   };
 }
 
+/// Whether a route load was ABORTED rather than failed.
+///
+/// An aborted load is usually not a failure at all: `control-ui-auth` throws
+/// `AbortError` the moment a gateway request is superseded, and a navigation or a
+/// reload aborts the load that was in flight the same way. Reporting that as
+/// "Panel failed to load" told people something had gone wrong when the only thing
+/// that had happened was that a newer request took over.
+export function isAbortedLoad(error: unknown): boolean {
+  // Read whatever shape arrives, because it is NOT always an Error: measured
+  // 2026-09-18, where an `AbortError` thrown from a route loader reaches this render
+  // as a plain object whose message reads "AbortError: Gateway request is no longer
+  // current". A predicate testing `instanceof Error` called that abortion a failure
+  // and drew "Panel failed to load" over a panel that had merely been superseded.
+  //
+  // The cause chain is walked for the same reason: a wrapper that carries the abort
+  // is still an abort.
+  const abortPattern = /abort(ed)?\b|abort error|no longer current/i;
+  const seen = new Set<unknown>();
+  for (let current: unknown = error, depth = 0; current && depth < 4; depth += 1) {
+    if (seen.has(current)) break;
+    seen.add(current);
+    if (typeof current === "string") {
+      if (abortPattern.test(current)) return true;
+      break;
+    }
+    if (typeof current !== "object") break;
+    const record = current as { name?: unknown; message?: unknown; cause?: unknown };
+    if (record.name === "AbortError") return true;
+    if (typeof record.message === "string" && abortPattern.test(record.message)) return true;
+    current = record.cause;
+  }
+  return false;
+}
+
+/// How many times an aborted load is retried in place before it IS reported.
+///
+/// Bounded on purpose: an abort that repeats is a real fault, and a retry loop
+/// would hide it behind a spinner forever. One retry covers the ordinary
+/// supersession, which is over by the time the next tick arrives.
+const ABORTED_LOAD_RETRIES = 1;
+
+/// The window those retries are counted in.
+///
+/// A window rather than a lifetime count, and rather than clearing the count when
+/// the route renders again: a route with a retained module renders WHILE its reload
+/// keeps aborting, so clearing on render reset the count on every cycle and an
+/// always-aborting route retried forever (measured: 17 loads). A window also means
+/// a spurious abort hours later still gets its own retry.
+const ABORTED_LOAD_WINDOW_MS = 10_000;
+
+/// Retries spent per route, and when its window started.
+const abortedLoadRetries = new Map<string, { count: number; at: number }>();
+
 function renderError<TRouteId extends string, TLoadContext, TModule, TData>(
   router: Router<TRouteId, TLoadContext, TModule, TData>,
   retryContext: TLoadContext | undefined,
@@ -82,6 +135,22 @@ function renderError<TRouteId extends string, TLoadContext, TModule, TData>(
   routeId: TRouteId,
   render?: () => unknown,
 ) {
+  if (retryContext !== undefined && isAbortedLoad(error)) {
+    const key = String(routeId);
+    const now = Date.now();
+    const spent = abortedLoadRetries.get(key);
+    const attempts = spent && now - spent.at < ABORTED_LOAD_WINDOW_MS ? spent.count : 0;
+    if (attempts < ABORTED_LOAD_RETRIES) {
+      abortedLoadRetries.set(key, { count: attempts + 1, at: now });
+      // A tick later, so the router is not re-entered inside the render that is
+      // still settling, and so a retry that aborts again is caught here rather
+      // than recursing.
+      queueMicrotask(() => {
+        void router.revalidate(retryContext, routeId).catch(() => undefined);
+      });
+      return renderLoadingState();
+    }
+  }
   const staleChunk = isStaleChunkImportError(error);
   if (staleChunk) {
     // Asset failures can mean an interrupted connection or a replaced build.

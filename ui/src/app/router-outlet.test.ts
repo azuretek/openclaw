@@ -4,7 +4,7 @@ import { ref } from "lit/directives/ref.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../src/shared/deferred.js";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
-import "./router-outlet.ts";
+import { isAbortedLoad } from "./router-outlet.ts";
 import { registerControlUiReloadGuard } from "./document-reload-guard.ts";
 
 type RouteId = "page" | "next";
@@ -270,6 +270,67 @@ describe("openclaw-router-outlet", () => {
     expect(outlet.querySelector('[role="alert"]')).toBeNull();
     outlet.remove();
     router.stop();
+  });
+
+  // An aborted load is a supersession rather than a failure: `control-ui-auth` throws
+  // `AbortError` the moment a gateway request is replaced, so the panel used to report
+  // "Panel failed to load / The operation was aborted" for something that had not gone
+  // wrong at all. Reported 2026-09-18 from the iOS client.
+  it("retries an aborted load in place instead of reporting it", async () => {
+    let loadCount = 0;
+    const router = createRouter<RouteId, TestContext, TestModule, TestData>({
+      routes: [
+        definePage({
+          id: "page",
+          path: "/page",
+          component: () => ({
+            render: (data: TestData | undefined) =>
+              html`<div data-testid="route-page">${data?.label ?? "pending"}</div>`,
+          }),
+          loader: (context) => {
+            loadCount += 1;
+            if (loadCount === 1) {
+              return Promise.reject(
+                new DOMException("Gateway request is no longer current", "AbortError"),
+              );
+            }
+            return { label: context.label };
+          },
+        }),
+      ],
+    });
+    const outlet = createOutlet(router, { label: "after-abort" });
+    await router.navigate("page", { label: "after-abort" }).catch(() => undefined);
+    await settleOutlet(outlet);
+    // The retry is scheduled a tick after the failed render, so wait for the effect
+    // rather than guessing at how many settles it takes.
+    await vi.waitFor(() => {
+      expect(loadCount).toBe(2);
+    });
+    await settleOutlet(outlet);
+
+    expect(outlet.querySelector('[data-testid="route-page"]')?.textContent).toBe("after-abort");
+    expect(outlet.querySelector('[role="alert"]')).toBeNull();
+    outlet.remove();
+    router.stop();
+  });
+
+  // The classifier is the new logic, so it is pinned directly against the shapes
+  // that were MEASURED. The plain object is the one that mattered: an AbortError from
+  // a route loader reaches the render as an object, not an Error, so a predicate
+  // testing `instanceof Error` reported a supersession as a failure to report.
+  it("recognises an abort in every shape it arrives in", () => {
+    expect(isAbortedLoad(new DOMException("superseded", "AbortError"))).toBe(true);
+    expect(isAbortedLoad({ message: "AbortError: Gateway request is no longer current" })).toBe(true);
+    expect(isAbortedLoad({ name: "AbortError" })).toBe(true);
+    expect(
+      isAbortedLoad(Object.assign(new Error("wrapper"), { cause: new DOMException("x", "AbortError") })),
+    ).toBe(true);
+
+    expect(isAbortedLoad(new Error("load failed"))).toBe(false);
+    expect(isAbortedLoad({ message: "load failed" })).toBe(false);
+    expect(isAbortedLoad(undefined)).toBe(false);
+    expect(isAbortedLoad(null)).toBe(false);
   });
 
   it("keeps asset recovery retryable after the reachability wait expires", async () => {
