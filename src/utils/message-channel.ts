@@ -80,7 +80,7 @@ export function isNativeAppUiClient(client?: GatewayClientInfoLike | null): bool
   const clientId = normalizeGatewayClientName(client?.id);
   return (
     normalizeGatewayClientMode(client?.mode) === GATEWAY_CLIENT_MODES.UI &&
-    clientId !== null &&
+    clientId !== undefined &&
     NATIVE_APP_UI_CLIENT_IDS.has(clientId)
   );
 }
