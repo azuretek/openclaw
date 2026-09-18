@@ -55,6 +55,7 @@ import {
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { chunkString, clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
+import { enqueueExecSteeringCompletion } from "./exec-steering-queue.js";
 import { buildGitHubExecLaunchArgv } from "./github-exec-launch.js";
 import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
 import type { AgentToolResult } from "./runtime/index.js";
@@ -411,6 +412,17 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   // Subagent sessions receive exec results via process poll and announce flow;
   // the heartbeat would fall back to the main session and cause spurious wakes.
   if (!isSubagentSessionKey(sessionKey)) {
+    // Steer the completion into the requester session's active or next turn so a
+    // busy session picks it up regardless of lane contention. The durable system
+    // event and heartbeat wake below remain the fallback for a fully idle session.
+    enqueueExecSteeringCompletion({
+      requesterSessionKey: eventSessionKey,
+      execId: session.id.slice(0, 8),
+      status,
+      exitLabel,
+      text: output,
+      endedAt: Date.now(),
+    });
     const wakeOptions = scopedHeartbeatWakeOptionsForPolicy(
       sessionKey,
       {

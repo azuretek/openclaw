@@ -5,6 +5,7 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { ImageContent } from "../../../llm/types.js";
 import type { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
+import { ackLeasedExecSteeringItems } from "../../exec-steering-queue.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { agentSessionQueuePromptContext } from "../../sessions/agent-session-prompting.js";
 import type { AgentSession } from "../../sessions/index.js";
@@ -59,6 +60,11 @@ type SteeringLease = {
   runIds: readonly string[];
 };
 
+type ExecSteeringLease = {
+  leaseId: string;
+  itemIds: readonly string[];
+};
+
 type TrajectoryRecorder = ReturnType<typeof createTrajectoryRuntimeRecorder>;
 
 export async function submitEmbeddedAttemptPrompt(input: {
@@ -76,9 +82,11 @@ export async function submitEmbeddedAttemptPrompt(input: {
   contextTokenBudget: number;
   images: ImageContent[];
   leasedSteering?: SteeringLease;
+  leasedExecSteering?: ExecSteeringLease;
   modelPrompt: string;
   onFinalPromptText: (prompt: string) => void;
   onSteeringAcknowledged: () => void;
+  onExecSteeringAcknowledged: () => void;
   prependContext?: string;
   promptActiveSession: PromptActiveSession;
   runtimeContextMessage?: RuntimeContextCustomMessage;
@@ -199,6 +207,10 @@ export async function submitEmbeddedAttemptPrompt(input: {
       ackPendingAgentSteeringItems(input.leasedSteering);
       input.onSteeringAcknowledged();
     }
+    if (input.leasedExecSteering) {
+      ackLeasedExecSteeringItems(input.leasedExecSteering);
+      input.onExecSteeringAcknowledged();
+    }
   } finally {
     cleanupProviderPromptHistoryTransform();
     cleanupModelPromptTransform();
@@ -265,12 +277,14 @@ export async function handleEmbeddedAttemptPromptError(input: {
   handleMidTurnPrecheckRequest: (request: MidTurnPrecheckRequest) => void;
   markYieldAborted: () => void;
   releaseLeasedSteering: (error?: unknown) => void;
+  releaseLeasedExecSteering: () => void;
   withOwnedTranscriptWrite: WithOwnedTranscriptWrite;
   yieldAbortSettled: Promise<void> | null;
   yieldDetected: boolean;
   yieldMessage: string | null;
 }): Promise<EmbeddedAttemptPromptErrorOutcome> {
   input.releaseLeasedSteering(input.error);
+  input.releaseLeasedExecSteering();
   const yieldAborted = input.yieldDetected && isSessionsYieldAbortError(input.error);
   if (yieldAborted) {
     // Publish terminal state before fallible recovery so outer cleanup still recognizes the yield.

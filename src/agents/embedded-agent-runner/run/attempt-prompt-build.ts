@@ -24,6 +24,10 @@ import { annotateInterSessionPromptText } from "../../../sessions/input-provenan
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import type { createCacheTrace } from "../../cache-trace.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
+import {
+  leasePendingExecSteeringItems,
+  prependExecSteeringPrompt,
+} from "../../exec-steering-queue.js";
 import { describeProviderRequestRoutingSummary } from "../../provider-attribution.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { AgentSession, SessionManager } from "../../sessions/index.js";
@@ -89,6 +93,11 @@ type EmbeddedAttemptSteeringLease = {
   runIds: string[];
 };
 
+type EmbeddedAttemptExecSteeringLease = {
+  leaseId: string;
+  itemIds: string[];
+};
+
 type EmbeddedAttemptPromptAssembly = {
   hookCtx: PromptBuildHookContext;
   effectivePrompt: string;
@@ -105,6 +114,7 @@ type EmbeddedAttemptPromptAssembly = {
   heartbeatSummary?: ReturnType<typeof resolveHeartbeatSummaryForAgent>;
   promptCacheChangesForTurn: PromptCacheChange[] | null;
   leasedSteering?: EmbeddedAttemptSteeringLease;
+  leasedExecSteering?: EmbeddedAttemptExecSteeringLease;
 };
 
 export async function prepareEmbeddedAttemptPromptAssembly(input: {
@@ -122,6 +132,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   applyPromptBuildToolsAllow: (toolsAllow: string[] | undefined) => string[];
   setActiveSessionSystemPrompt: (systemPrompt: string) => void;
   setLeasedSteering: (lease: EmbeddedAttemptSteeringLease) => void;
+  setLeasedExecSteering: (lease: EmbeddedAttemptExecSteeringLease) => void;
   cache: {
     observabilityEnabled: boolean;
     retention: CacheRetention;
@@ -386,6 +397,38 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     }
   }
 
+  let leasedExecSteering: EmbeddedAttemptExecSteeringLease | undefined;
+  if (attempt.sessionKey && !preserveExactPrompt) {
+    const execLeaseId = `${attempt.runId}:exec-steering`;
+    const leasedExec = leasePendingExecSteeringItems({
+      requesterSessionKey: attempt.sessionKey,
+      leaseId: execLeaseId,
+    });
+    if (leasedExec) {
+      leasedExecSteering = { leaseId: execLeaseId, itemIds: leasedExec.itemIds };
+      // Transfer cleanup ownership before any prompt mutation can throw.
+      input.setLeasedExecSteering(leasedExecSteering);
+      effectivePrompt = prependExecSteeringPrompt({
+        steeringPrompt: leasedExec.prompt,
+        prompt: effectivePrompt,
+      });
+      promptForRuntimeContextSplit = prependExecSteeringPrompt({
+        steeringPrompt: leasedExec.prompt,
+        prompt: promptForRuntimeContextSplit,
+      });
+      if (transcriptPromptForRuntimeSplit !== undefined) {
+        transcriptPromptForRuntimeSplit = prependExecSteeringPrompt({
+          steeringPrompt: leasedExec.prompt,
+          prompt: transcriptPromptForRuntimeSplit,
+        });
+      }
+      log.debug(
+        `exec steering: injected ${leasedExec.itemIds.length} queued completion(s) into turn ` +
+          `runId=${attempt.runId} sessionKey=${attempt.sessionKey}`,
+      );
+    }
+  }
+
   const promptForModelBeforeRuntimeContextSplit = effectivePrompt;
   const promptForRuntimeContextBeforeAnnotation = promptForRuntimeContextSplit;
   if (!preserveExactPrompt) {
@@ -424,6 +467,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     heartbeatSummary,
     promptCacheChangesForTurn,
     leasedSteering,
+    leasedExecSteering,
   };
 }
 

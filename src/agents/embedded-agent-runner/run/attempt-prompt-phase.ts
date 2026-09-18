@@ -4,6 +4,7 @@ import {
   buildHeartbeatOutcomeContext,
   claimHeartbeatOutcomeForRun,
 } from "../../../infra/heartbeat-outcome-store.js";
+import { releaseLeasedExecSteeringItems } from "../../exec-steering-queue.js";
 import { releasePendingAgentSteeringItems } from "../../subagents/registry/subagent-registry.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { log } from "../logger.js";
@@ -50,6 +51,7 @@ type PromptAssemblyPhaseInput = Omit<
   | "sessionManager"
   | "applyPromptBuildToolsAllow"
   | "setLeasedSteering"
+  | "setLeasedExecSteering"
 >;
 type PromptContextPhaseInput = Omit<
   PromptContextInput,
@@ -145,6 +147,7 @@ export async function runEmbeddedAttemptPromptPhase(input: {
   const { activeSession, attempt, sessionManager } = input;
   let skipPromptSubmission = false;
   let leasedSteering: PromptAssemblyResult["leasedSteering"];
+  let leasedExecSteering: PromptAssemblyResult["leasedExecSteering"];
 
   const patchState = (patch: Partial<PromptPhaseState>) => {
     input.lifecycle.writeState({ ...input.lifecycle.readState(), ...patch });
@@ -164,6 +167,16 @@ export async function runEmbeddedAttemptPromptPhase(input: {
       error: error ? formatErrorMessage(error) : undefined,
     });
     leasedSteering = undefined;
+  };
+  const releaseLeasedExecSteering = () => {
+    if (!leasedExecSteering) {
+      return;
+    }
+    releaseLeasedExecSteeringItems({
+      itemIds: leasedExecSteering.itemIds,
+      leaseId: leasedExecSteering.leaseId,
+    });
+    leasedExecSteering = undefined;
   };
   const handleMidTurnPrecheckRequest = (request: MidTurnPrecheckRequest) => {
     const outcome = handleEmbeddedAttemptMidTurnPrecheck({
@@ -200,6 +213,9 @@ export async function runEmbeddedAttemptPromptPhase(input: {
     setLeasedSteering: (lease) => {
       leasedSteering = lease;
     },
+    setLeasedExecSteering: (lease) => {
+      leasedExecSteering = lease;
+    },
   });
   if (input.emptyExplicitToolAllowlistError) {
     patchState({
@@ -212,6 +228,7 @@ export async function runEmbeddedAttemptPromptPhase(input: {
   const { hookCtx, promptBuildPrependContext, promptBuildAppendContext, transcriptLeafId } =
     promptAssembly;
   leasedSteering = promptAssembly.leasedSteering ?? leasedSteering;
+  leasedExecSteering = promptAssembly.leasedExecSteering ?? leasedExecSteering;
   input.lifecycle.setPromptCacheChangesForTurn(promptAssembly.promptCacheChangesForTurn);
 
   try {
@@ -349,10 +366,14 @@ export async function runEmbeddedAttemptPromptPhase(input: {
         contextTokenBudget: promptContext.contextTokenBudget,
         images: imageResult.images,
         ...(leasedSteering ? { leasedSteering } : {}),
+        ...(leasedExecSteering ? { leasedExecSteering } : {}),
         modelPrompt: promptContext.promptForModel,
         onFinalPromptText: input.lifecycle.setFinalPromptText,
         onSteeringAcknowledged: () => {
           leasedSteering = undefined;
+        },
+        onExecSteeringAcknowledged: () => {
+          leasedExecSteering = undefined;
         },
         ...(promptBuildPrependContext ? { prependContext: promptBuildPrependContext } : {}),
         ...(promptContext.runtimeContextMessageForCurrentTurn
@@ -368,6 +389,7 @@ export async function runEmbeddedAttemptPromptPhase(input: {
       });
     } else {
       releaseLeasedSteering(state.promptError ?? "prompt submission skipped");
+      releaseLeasedExecSteering();
     }
     publishDispatchState(state);
   } catch (error) {
@@ -378,6 +400,7 @@ export async function runEmbeddedAttemptPromptPhase(input: {
       handleMidTurnPrecheckRequest,
       markYieldAborted: input.lifecycle.markYieldAborted,
       releaseLeasedSteering,
+      releaseLeasedExecSteering,
       withOwnedTranscriptWrite: input.withOwnedTranscriptWrite,
       ...input.lifecycle.readYieldState(),
     });
