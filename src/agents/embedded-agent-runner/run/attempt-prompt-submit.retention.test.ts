@@ -179,6 +179,7 @@ it("submits deferred child results after canonical archive pruning without poiso
     );
   });
   const onSteeringAcknowledged = vi.fn();
+  const onExecSteeringAcknowledged = vi.fn();
   const sessionPromptState = getEmbeddedSessionPromptState(sessionId);
   const prompt = prependAgentSteeringPrompt({
     steeringPrompt: leased.prompt,
@@ -194,6 +195,7 @@ it("submits deferred child results after canonical archive pruning without poiso
     transcriptPrompt: prompt,
     onFinalPromptText: vi.fn(),
     onSteeringAcknowledged,
+    onExecSteeringAcknowledged,
     persistToolResultProjections: vi.fn(async () => {}),
     promptActiveSession: (text, options) => session.prompt(text, options),
     runtimeOnly: false,
