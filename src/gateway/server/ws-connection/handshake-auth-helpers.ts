@@ -34,8 +34,6 @@ type HandshakeBrowserSecurityContext = {
   authRateLimiter?: AuthRateLimiter;
 };
 
-export { isNativeAppUiClient } from "../../../utils/message-channel.js";
-
 function resolveBrowserOriginRateLimitKey(requestOrigin?: string): string {
   const trimmedOrigin = requestOrigin?.trim();
   if (!trimmedOrigin) {
