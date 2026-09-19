@@ -2,7 +2,6 @@ import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { AssistantMessage, Model } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { recordInboundMediaOwnersInValue } from "../../media/inbound-media-ownership.js";
 import type {
   Agent,
   AgentEvent,
@@ -14,6 +13,7 @@ import type {
 import { isToolResultError } from "../tool-result-error.js";
 import { takeCodeModeResponseSource } from "../transcript-code-mode-source.js";
 import { persistAgentSessionMessage } from "./agent-session-transcript.js";
+import { bindStagedMediaOwnership } from "./agent-session-staged-media.js";
 import type {
   AgentSessionConfig,
   AgentSessionEvent,
@@ -423,15 +423,7 @@ export abstract class AgentSessionBase {
         const toolResultChangedByExtension =
           event.message.role === "toolResult" &&
           this.extensionModifiedToolResultIds.delete(event.message.toolCallId);
-        if (event.message.role === "toolResult" && this.sessionKey) {
-          // A staged media reference is readable only by the session that published its
-          // result, and this is where that reference lands in a session. Best-effort: the
-          // staged object already refuses a request that names no session, so a failure
-          // here narrows nothing away from the shipped private behaviour.
-          void recordInboundMediaOwnersInValue(event.message.content, {
-            sessionKey: this.sessionKey,
-          }).catch(() => undefined);
-        }
+        bindStagedMediaOwnership(event.message, this.sessionKey);
         try {
           const entryId = await persistAgentSessionMessage(this.sessionManager, event.message, {
             invalidateSerializedPrefixCache: messageChanged || toolResultChangedByExtension,
