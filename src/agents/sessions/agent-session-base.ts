@@ -13,7 +13,7 @@ import type {
 import { isToolResultError } from "../tool-result-error.js";
 import { takeCodeModeResponseSource } from "../transcript-code-mode-source.js";
 import { persistAgentSessionMessage } from "./agent-session-transcript.js";
-import { bindStagedMediaOwnership } from "./agent-session-staged-media.js";
+import { bindStagedMediaOwnershipForEvent } from "./agent-session-staged-media.js";
 import type {
   AgentSessionConfig,
   AgentSessionEvent,
@@ -387,12 +387,9 @@ export abstract class AgentSessionBase {
     messageChanged = prepareSessionToolResult(this.sessionManager, event) || messageChanged;
     const publishAfterPersistence = event.type === "message_end" && event.message.role === "user";
 
-    // Bind a staged reference before the message reaches a listener or the store. The media
-    // route refuses a staged object that has no owner, and a reader learns the reference from
-    // this message, so the owner has to be on the record while the reference is still invisible.
-    if (event.type === "message_end") {
-      await bindStagedMediaOwnership(event.message, this.sessionKey);
-    }
+    // Bind a staged reference before the message reaches a listener or the store, since the
+    // media route refuses a staged object whose owner is not yet on the record.
+    await bindStagedMediaOwnershipForEvent(event, this.sessionKey);
 
     // Notify all listeners
     if (event.type === "agent_end") {
