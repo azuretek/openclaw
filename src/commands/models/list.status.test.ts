@@ -1361,7 +1361,7 @@ describe("modelsStatusCommand auth overview", () => {
     expect(textRuntime.exit).toHaveBeenCalledWith(1);
   });
 
-  it("reports missing static transport observation as indeterminate", async () => {
+  it("resolves a contract-less first-party id onto the Platform route instead of leaving it indeterminate", async () => {
     const localRuntime = createTestRuntime();
     await withOpenAIStatusFixture(
       {
@@ -1382,10 +1382,10 @@ describe("modelsStatusCommand auth overview", () => {
     );
 
     const payload = parseFirstJsonLog(localRuntime);
-    expect(payload.auth.missingProvidersInUse).toEqual([]);
+    expect(payload.auth.missingProvidersInUse).toEqual(["openai"]);
     expect(payload.auth.modelRouteIssues).toEqual([
       expect.objectContaining({
-        kind: "indeterminate",
+        kind: "missing-auth",
         provider: "openai",
         model: "gpt-5.4-nano",
       }),
