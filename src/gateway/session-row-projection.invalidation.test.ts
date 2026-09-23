@@ -604,6 +604,35 @@ it("reuses row identities across lists until their entry, profile, or config cha
   });
 });
 
+it("invalidates projected rows when the published config object is republished after an in-place edit", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: "agent:main:same-object" },
+      { sessionId: "same-object", updatedAt: 1 },
+    );
+    const release = projectionWork.retainSessionListForegroundWork();
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    try {
+      const published = structuredClone(cfg);
+      setRuntimeConfigSnapshot(published);
+      await projection.ensureMaterialized();
+      expect(projection.dirtyRowCount).toBe(0);
+
+      // An in-place edit republished on the same object can change what rows resolve,
+      // so it must refresh every row even though the object compares equal to itself.
+      Object.assign(published.agents, { defaults: { model: "unit-test/model" } });
+      setRuntimeConfigSnapshot(published);
+      expect(projection.dirtyRowCount).toBeGreaterThan(0);
+    } finally {
+      await projection.ensureMaterialized();
+      projection.dispose();
+      release();
+      resetConfigRuntimeState();
+    }
+  });
+});
+
 it("keeps projected rows clean when a config publication resolves to the published snapshot", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } };

@@ -116,7 +116,7 @@ describe("prepared runtime snapshots", () => {
     expect(changes).toHaveBeenCalledExactlyOnceWith({ all: true, scope: "config" });
   });
 
-  it("leaves a source-only republish out of session changes", () => {
+  it("invalidates sessions when a source-only republish reuses the published object", () => {
     const changes = vi.fn();
     unregister.push(sessionChanges.subscribe(changes));
     const runtime: OpenClawConfig = { gateway: { port: 18789 } };
@@ -128,14 +128,15 @@ describe("prepared runtime snapshots", () => {
     expect(changes).toHaveBeenCalledExactlyOnceWith({ all: true, scope: "config" });
     changes.mockClear();
 
-    // A newer canonical source does not change the object consumers read.
+    // The newer source copies its resolution facts onto the published object in place, so
+    // consumers can read changed provenance and the same-object publication still invalidates.
     expect(
       setRuntimeConfigSourceSnapshotIfCurrent({
         expectedRevision: getRuntimeConfigSnapshotMetadata()?.revision ?? 0,
         sourceConfig: source("unit-test/other"),
       }),
     ).toBe(true);
-    expect(changes).not.toHaveBeenCalled();
+    expect(changes).toHaveBeenCalledExactlyOnceWith({ all: true, scope: "config" });
   });
 
   it.each([

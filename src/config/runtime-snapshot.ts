@@ -226,7 +226,9 @@ function publishRuntimeConfigSnapshot(config: OpenClawConfig, sourceConfig?: Ope
   runtimeConfigSnapshot = config;
   runtimeConfigSourceSnapshot = sourceConfig ?? null;
   runtimeConfigSnapshotMetadata = createRuntimeConfigSnapshotMetadata(config, sourceConfig);
-  if (previous === null || !configSnapshotsMatch(previous, config)) {
+  // A same-object publication may follow an in-place edit or a provenance copy, so it
+  // always invalidates; only a distinct, equivalent object is withheld.
+  if (previous === null || previous === config || !configSnapshotsMatch(previous, config)) {
     sessionChanges.emit({ all: true, scope: "config" });
   }
 }
