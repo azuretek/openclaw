@@ -1,5 +1,4 @@
 // Produces redacted runtime config snapshots for diagnostics and UI surfaces.
-import { isDeepStrictEqual } from "node:util";
 import { sha256Base64Url } from "../infra/crypto-digest.js";
 import { clearExecutablePathCache } from "../infra/executable-path.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -23,6 +22,7 @@ import {
   type CapturedRuntimeConfigRead,
   getRuntimeConfigCapture,
 } from "./runtime-config-capture-state.js";
+import { configSnapshotsMatch, stableConfigStringify } from "./runtime-config-snapshot-match.js";
 import type { OpenClawConfig } from "./types.js";
 
 export type RuntimeConfigSnapshotRefreshOptions = {
@@ -175,39 +175,6 @@ const runtimeConfigSnapshotPreparers = new Map<
     }
   | undefined
 >();
-
-function stableConfigStringify(value: unknown): string {
-  if (value === null || typeof value !== "object") {
-    return JSON.stringify(value) ?? "null";
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map((entry) => stableConfigStringify(entry)).join(",")}]`;
-  }
-  const record = value as Record<string, unknown>;
-  const keys = Object.keys(record).toSorted();
-  return `{${keys
-    .map((key) => `${JSON.stringify(key)}:${stableConfigStringify(record[key])}`)
-    .join(",")}}`;
-}
-
-function configSnapshotsMatch(left: OpenClawConfig, right: OpenClawConfig): boolean {
-  if (left === right) {
-    return true;
-  }
-  // Fresh reads allocate new facts. Compare their complete provenance, not object identity
-  // or just JSON config bytes: same-byte values can name different authored SecretRefs.
-  if (
-    getConfigResolutionFacts(left) !== getConfigResolutionFacts(right) &&
-    !isDeepStrictEqual(serializeConfigResolutionFacts(left), serializeConfigResolutionFacts(right))
-  ) {
-    return false;
-  }
-  try {
-    return stableConfigStringify(left) === stableConfigStringify(right);
-  } catch {
-    return false;
-  }
-}
 
 // Diagnostic callers stop at their raw revision; this owner accepts config objects.
 // Only immutable identities share hashes across reads.
