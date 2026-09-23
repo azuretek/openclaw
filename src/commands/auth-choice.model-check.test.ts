@@ -395,12 +395,13 @@ describe("warnIfModelConfigLooksOff", () => {
     const config = {
       agents: { defaults: { model: "openai/gpt-5.4-nano" } },
     } as OpenClawConfig;
+    const env = { OPENAI_API_KEY: "api-key" };
 
-    expect(resolveDefaultModelAuthStatus(config)).toMatchObject({
+    expect(resolveDefaultModelAuthStatus(config, { env })).toMatchObject({
       status: "ready",
       hasAuth: true,
     });
-    await warnIfModelConfigLooksOff(config, prompter);
+    await warnIfModelConfigLooksOff(config, prompter, { env });
 
     expect(note).not.toHaveBeenCalled();
   });
