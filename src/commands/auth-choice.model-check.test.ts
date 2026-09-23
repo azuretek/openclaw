@@ -389,11 +389,27 @@ describe("warnIfModelConfigLooksOff", () => {
     ).toMatchObject({ status: "ready", hasAuth: true });
   });
 
-  it("reports an unknown static transport as indeterminate instead of missing auth", async () => {
+  it("resolves a contract-less first-party id onto the Platform route instead of leaving it indeterminate", async () => {
     const note = vi.fn(async () => {});
     const prompter = makePrompter({ note });
     const config = {
       agents: { defaults: { model: "openai/gpt-5.4-nano" } },
+    } as OpenClawConfig;
+
+    expect(resolveDefaultModelAuthStatus(config)).toMatchObject({
+      status: "ready",
+      hasAuth: true,
+    });
+    await warnIfModelConfigLooksOff(config, prompter);
+
+    expect(note).not.toHaveBeenCalled();
+  });
+
+  it("reports an unknown static transport as indeterminate instead of missing auth", async () => {
+    const note = vi.fn(async () => {});
+    const prompter = makePrompter({ note });
+    const config = {
+      agents: { defaults: { model: "openai/gpt-9-unreleased" } },
     } as OpenClawConfig;
 
     expect(resolveDefaultModelAuthStatus(config)).toMatchObject({
@@ -403,7 +419,7 @@ describe("warnIfModelConfigLooksOff", () => {
     await warnIfModelConfigLooksOff(config, prompter);
 
     expect(note).toHaveBeenCalledWith(
-      'Auth readiness could not be confirmed for "openai/gpt-5.4-nano". Verify the selected model route and credential source before continuing.',
+      'Auth readiness could not be confirmed for "openai/gpt-9-unreleased". Verify the selected model route and credential source before continuing.',
       "Model check",
     );
   });
