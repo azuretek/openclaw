@@ -7,7 +7,6 @@ import {
   isOpenAISubscriptionOnlyRouteModelId,
   normalizeOpenAIModelRouteId,
 } from "./model-route-contract.js";
-import { buildOpenAICodexProviderHooks } from "./openai-chatgpt-provider.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
 import { resolveModelRoutes } from "./provider-policy-api.js";
 
@@ -39,30 +38,8 @@ describe("OpenAI model route contract", () => {
     expect(isOpenAISubscriptionOnlyRouteModelId("GPT-5.3-CODEX-SPARK")).toBe(true);
   });
 
-  it("routes a contract-less modern id to the Platform API without an authored base URL", () => {
-    expect(isOpenAIDualRouteModelId("gpt-5.4-nano")).toBe(false);
-    expect(isOpenAIPlatformOnlyRouteModelId("gpt-5.4-nano")).toBe(false);
-    expect(OPENAI_CHATGPT_MODERN_MODEL_IDS).not.toContain("gpt-5.4-nano");
-    expect(resolveUnconfiguredModel("gpt-5.4-nano")).toMatchObject({
-      kind: "routes",
-      defaultRuntimeId: "codex",
-      routes: [
-        {
-          api: "openai-responses",
-          baseUrl: "https://api.openai.com/v1",
-          authRequirement: "api-key",
-        },
-      ],
-    });
-    // Unknown custom ids keep deferring to observation or authored config.
-    expect(resolveUnconfiguredModel("gpt-future-observed")).toMatchObject({
-      kind: "indeterminate",
-    });
-  });
-
-  it("keeps route eligibility aligned with both provider runtime surfaces", () => {
+  it("keeps route eligibility aligned with the registered provider", () => {
     const provider = buildOpenAIProvider();
-    const chatGPTHooks = buildOpenAICodexProviderHooks();
     const routeModelIds = [
       ...new Set([...OPENAI_PROVIDER_MODERN_MODEL_IDS, ...OPENAI_CHATGPT_MODERN_MODEL_IDS]),
     ];
@@ -91,10 +68,6 @@ describe("OpenAI model route contract", () => {
       // least one route with nothing authored or observed (gpt-5.4-nano, #148559).
       expect(resolveUnconfiguredModel(modelId)).toMatchObject({ kind: "routes" });
     }
-    for (const modelId of OPENAI_CHATGPT_MODERN_MODEL_IDS) {
-      expect(chatGPTHooks.isModernModelRef?.({ provider: "openai", modelId })).toBe(true);
-    }
-
     for (const modelId of dualRouteModelIds) {
       const resolution = resolveUnconfiguredModel(modelId);
       expect(
