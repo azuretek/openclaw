@@ -268,10 +268,23 @@ describe("prepareAgentRuntimeAuthPlan", () => {
     expect(plan.providerForAuth).toBe("canonical-provider");
   });
 
+  it("resolves a contract-less first-party id onto the Platform route and requires Platform auth", () => {
+    expect(() =>
+      prepareAgentRuntimeAuthPlan({
+        provider: "openai",
+        modelId: "gpt-5.4-nano",
+        env: {},
+        harnessId: "codex",
+        harnessRuntime: "codex",
+        authProfileStore: authStore({}),
+      }),
+    ).toThrow("No route-compatible authentication source is configured for openai.");
+  });
+
   it("keeps unknown no-observation models on the legacy auth plan", () => {
     const plan = prepareAgentRuntimeAuthPlan({
       provider: "openai",
-      modelId: "gpt-5.4-nano",
+      modelId: "gpt-9-unreleased",
       env: {},
       harnessId: "codex",
       harnessRuntime: "codex",
