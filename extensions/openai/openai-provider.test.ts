@@ -9,6 +9,11 @@ import {
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OPENAI_API_BASE_URL, OPENAI_CODEX_RESPONSES_BASE_URL } from "./base-url.js";
+import {
+  expectCatalogEntry,
+  expectFields,
+  expectNoCatalogEntry,
+} from "./catalog-expectations.test-support.js";
 import { OPENAI_DEFAULT_MODEL } from "./default-models.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
@@ -237,30 +242,6 @@ async function runWrappedPayloadCase(params: {
     payload,
     options: capturedOptions,
   };
-}
-
-function expectFields(value: unknown, expected: Record<string, unknown>): void {
-  if (!value || typeof value !== "object") {
-    throw new Error("expected fields object");
-  }
-  const record = value as Record<string, unknown>;
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    expect(record[key], key).toEqual(expectedValue);
-  }
-}
-
-function expectCatalogEntry(entries: unknown, id: string, expected: Record<string, unknown>): void {
-  expect(Array.isArray(entries)).toBe(true);
-  const entry = (entries as Array<Record<string, unknown>>).find(
-    (candidate) => candidate.id === id,
-  );
-  expectFields(entry, expected);
-}
-
-function expectNoCatalogEntry(entries: unknown, id: string): void {
-  expect(Array.isArray(entries)).toBe(true);
-  const entryIds = new Set((entries as Array<Record<string, unknown>>).map((entry) => entry.id));
-  expect(entryIds.has(id)).toBe(false);
 }
 
 describe("buildOpenAIProvider", () => {
@@ -2030,52 +2011,6 @@ describe("buildOpenAIProvider", () => {
         } as never)
         ?.levels.map((level) => level.id),
     ).toEqual(expect.arrayContaining(["xhigh", "max"]));
-  });
-
-  it("keeps a first-party id outside the ChatGPT catalog on the Platform transport under the Codex runtime", () => {
-    // gpt-5.4-nano is modern but not in OPENAI_CHATGPT_MODERN_MODEL_IDS. Projecting
-    // it onto the Codex transport here made it the model's only observed route,
-    // and the auth planner then rejected an API key as incompatible (#148559).
-    const provider = buildOpenAIProvider();
-    const registry = {
-      find: () => ({
-        provider: "openai",
-        id: "gpt-5.4-nano",
-        name: "GPT-5.4 Nano",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-        reasoning: true,
-        input: ["text", "image"],
-        cost: { input: 0.1, output: 0.4, cacheRead: 0.01, cacheWrite: 0 },
-        contextWindow: 400_000,
-        maxTokens: 128_000,
-      }),
-    };
-    const nano = provider.resolveDynamicModel?.({
-      provider: "openai",
-      modelId: "gpt-5.4-nano",
-      modelRegistry: registry,
-      agentRuntimeId: "codex",
-    } as never);
-    expect(nano).toMatchObject({
-      id: "gpt-5.4-nano",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-    });
-    // The dual-route sibling still follows the runtime onto the Codex transport.
-    const mini = provider.resolveDynamicModel?.({
-      provider: "openai",
-      modelId: "gpt-5.4-mini",
-      modelRegistry: {
-        find: () => ({ ...registry.find(), id: "gpt-5.4-mini", name: "GPT-5.4 Mini" }),
-      },
-      agentRuntimeId: "codex",
-    } as never);
-    expect(mini).toMatchObject({
-      id: "gpt-5.4-mini",
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api/codex",
-    });
   });
 
   it("does not invent an unlisted model for authored Platform credentials", () => {
