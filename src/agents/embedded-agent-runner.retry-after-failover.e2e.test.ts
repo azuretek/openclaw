@@ -207,38 +207,45 @@ async function runFailoverScenario(params: {
   const sessionId = runId;
   const preparedRunAdmission = prepareSystemAgentRunAdmission(config, runId, "main", "integration");
 
-  const outcome = await runWithModelFallback<RunResult>({
-    cfg: config,
-    agentId: "main",
-    agentDir,
-    provider: "openai",
-    model: "mock-1",
-    runId,
-    sessionId,
-    run: async (provider, model) =>
-      runEmbeddedAgent({
-        preparedRunAdmission,
-        sessionId,
-        sessionTarget: {
-          agentId: "main",
+  // The admission holds a protected run-registry claim until closed, so release it
+  // on success and on failure; otherwise the claim outlives the case.
+  let outcome: Awaited<ReturnType<typeof runWithModelFallback<RunResult>>>;
+  try {
+    outcome = await runWithModelFallback<RunResult>({
+      cfg: config,
+      agentId: "main",
+      agentDir,
+      provider: "openai",
+      model: "mock-1",
+      runId,
+      sessionId,
+      run: async (provider, model) =>
+        runEmbeddedAgent({
+          preparedRunAdmission,
           sessionId,
-          sessionKey: `agent:main:integration:${sessionId}`,
-          storePath: path.join(agentDir, "openclaw-agent.sqlite"),
-        },
-        workspaceDir,
-        agentDir,
-        config,
-        prompt: "Reply with exactly ok.",
-        provider,
-        model,
-        // Bound the attempt well under the 9897s floor: if the fix regressed and
-        // the runner slept the floor, this attempt would stall here and the
-        // fallback would never serve an answer.
-        timeoutMs: 30_000,
-        runId,
-        disableTools: true,
-      }),
-  });
+          sessionTarget: {
+            agentId: "main",
+            sessionId,
+            sessionKey: `agent:main:integration:${sessionId}`,
+            storePath: path.join(agentDir, "openclaw-agent.sqlite"),
+          },
+          workspaceDir,
+          agentDir,
+          config,
+          prompt: "Reply with exactly ok.",
+          provider,
+          model,
+          // Bound the attempt well under the 9897s floor: if the fix regressed and
+          // the runner slept the floor, this attempt would stall here and the
+          // fallback would never serve an answer.
+          timeoutMs: 30_000,
+          runId,
+          disableTools: true,
+        }),
+    });
+  } finally {
+    preparedRunAdmission.close();
+  }
 
   return {
     outcome: outcome.outcome,
