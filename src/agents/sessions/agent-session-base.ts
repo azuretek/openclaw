@@ -12,8 +12,8 @@ import type {
 } from "../runtime/index.js";
 import { isToolResultError } from "../tool-result-error.js";
 import { takeCodeModeResponseSource } from "../transcript-code-mode-source.js";
-import { persistAgentSessionMessage } from "./agent-session-transcript.js";
 import { bindStagedMediaOwnershipForEvent } from "./agent-session-staged-media.js";
+import { persistAgentSessionMessage } from "./agent-session-transcript.js";
 import type {
   AgentSessionConfig,
   AgentSessionEvent,
