@@ -5,7 +5,10 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { ImageContent } from "../../../llm/types.js";
 import type { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
-import { ackLeasedExecSteeringItems } from "../../exec-steering-queue.js";
+import {
+  ackLeasedExecSteeringItems,
+  releaseLeasedExecSteeringItems,
+} from "../../exec-steering-queue.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { agentSessionQueuePromptContext } from "../../sessions/agent-session-prompting.js";
 import {
@@ -110,6 +113,11 @@ export async function submitEmbeddedAttemptPrompt(input: {
   const { activeSession, attempt } = input;
   let pendingSteering = input.leasedSteering;
   let pendingExecSteering = input.leasedExecSteering;
+  // Set only when this prompt's provider request was actually dispatched. An
+  // input extension or extension command can handle AgentSession.prompt and
+  // return normally without any provider I/O, and acknowledging then would
+  // retire the completion (and its shared durable event) unseen.
+  let execSteeringDispatched = false;
   const assertSteeringCurrent = () => {
     if (pendingSteering && !pendingSteering.isCurrent()) {
       throw new Error(
@@ -141,6 +149,9 @@ export async function submitEmbeddedAttemptPrompt(input: {
       // Pre-prompt compaction has not consumed the deferred answer.
       if (captureCurrentPromptForModel) {
         pendingSteering = undefined;
+        if (pendingExecSteering) {
+          execSteeringDispatched = true;
+        }
         pendingExecSteering = undefined;
       }
       return stream;
@@ -235,7 +246,13 @@ export async function submitEmbeddedAttemptPrompt(input: {
       input.onSteeringAcknowledged();
     }
     if (input.leasedExecSteering) {
-      ackLeasedExecSteeringItems(input.leasedExecSteering);
+      if (execSteeringDispatched) {
+        ackLeasedExecSteeringItems(input.leasedExecSteering);
+      } else {
+        // The prompt was handled before provider dispatch: return the lease so
+        // the completion stays queued for the next turn or the heartbeat.
+        releaseLeasedExecSteeringItems(input.leasedExecSteering);
+      }
       input.onExecSteeringAcknowledged();
     }
   } finally {

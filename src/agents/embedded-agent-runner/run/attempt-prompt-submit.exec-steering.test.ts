@@ -26,6 +26,7 @@ import {
   registerAgentSessionLoopTestLifecycle,
   streamMocks,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
+import { createResourceLoader } from "../../sessions/agent-session-loop-resource-loader.test-support.js";
 import { getEmbeddedSessionPromptState } from "../session-prompt-state.js";
 import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
 
@@ -177,6 +178,58 @@ it("refuses another agent's copy of a shared global key before provider I/O", as
     leaseId,
   });
   expect(owned?.prompt).toContain("RESEARCH SECRET OUTPUT");
+});
+
+it("keeps the completion queued when an input extension handles the prompt", async () => {
+  const receipt = enqueueSystemEventReceipt(
+    "Exec completed (handled1, exit 0) :: HANDLED OUTPUT",
+    { sessionKey: "agent:research:global", contextKey: "exec:handled1" },
+    { allowDuplicate: true },
+  );
+  if (!receipt) {
+    throw new Error("Expected a durable system event receipt");
+  }
+  enqueueOwned("HANDLED OUTPUT", "exec:handled1", "handled1", receipt.eventId);
+  const leased = leasePendingExecSteeringItems({
+    requesterSessionKey,
+    ownerAgentId: "research",
+    leaseId,
+  });
+  if (!leased) {
+    throw new Error("Expected a leased exec completion");
+  }
+
+  const requests: Context["messages"][] = [];
+  recordProviderRequests(requests);
+  // An input extension handles AgentSession.prompt, which then returns
+  // normally without runAgentPrompt or any provider request.
+  const handlers = new Map<string, Array<() => Promise<unknown>>>([
+    ["input", [async () => ({ action: "handled" })]],
+  ]);
+  const { session } = await createTestSession({ resourceLoader: createResourceLoader(handlers) });
+  const input = submissionInput(
+    { ...leased, leaseId },
+    prependExecSteeringPrompt({ steeringPrompt: leased.prompt, prompt: "Continue the work." }),
+  );
+  await submitEmbeddedAttemptPrompt({
+    ...input,
+    activeSession: session,
+    promptActiveSession: (prompt, options) => session.prompt(prompt, options),
+  });
+
+  // Nothing reached the provider, so nothing was acknowledged: the durable
+  // event is still pending and the steering copy is back in the queue.
+  expect(streamMocks.streamSimple).not.toHaveBeenCalled();
+  expect(requests).toEqual([]);
+  expect(peekSystemEventEntries("agent:research:global").map((event) => event.id)).toEqual([
+    receipt.eventId,
+  ]);
+  const next = leasePendingExecSteeringItems({
+    requesterSessionKey,
+    ownerAgentId: "research",
+    leaseId: "next-turn",
+  });
+  expect(next?.prompt).toContain("HANDLED OUTPUT");
 });
 
 it("rejects an already-leased copy acknowledged elsewhere before provider dispatch", async () => {

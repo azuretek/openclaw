@@ -784,6 +784,35 @@ describe("exec-steering-queue", () => {
     expect(hasPendingExecSteeringItems({ requesterSessionKey })).toBe(false);
   });
 
+  it("settles a heartbeat's saved snapshot after its entry was evicted before delivery", () => {
+    const shared = enqueueSharedOccurrence({ execId: "hbevict1", text: "heartbeat snapshot" });
+
+    // The heartbeat prepares its turn from a saved snapshot of the queue.
+    const snapshot = peekSystemEventEntries(requesterSessionKey);
+    expect(snapshot.map((event) => event.id)).toContain(shared.durableEventId);
+
+    // Before its reply is delivered, more than MAX_EVENTS newer events evict
+    // the saved occurrence from the live queue.
+    for (let index = 0; index < 25; index += 1) {
+      enqueueSystemEventEntry(`Newer system event ${index}`, {
+        sessionKey: requesterSessionKey,
+      });
+    }
+    expect(peekSystemEventEntries(requesterSessionKey).map((event) => event.id)).not.toContain(
+      shared.durableEventId,
+    );
+
+    // Delivery succeeded, so the heartbeat settles exactly its saved snapshot.
+    // Nothing of it is still resident, yet the delivered occurrence is settled.
+    expect(consumeSelectedSystemEventEntries(requesterSessionKey, snapshot)).toEqual([]);
+
+    // No second report: the steering copy cannot lease the completion again.
+    expect(hasPendingExecSteeringItems({ requesterSessionKey })).toBe(false);
+    expect(
+      leasePendingExecSteeringItems({ requesterSessionKey, leaseId: "after-heartbeat" }),
+    ).toBeUndefined();
+  });
+
   it("does not retire a steering copy when a different occurrence is acknowledged", () => {
     enqueueSharedOccurrence({ execId: "bound001", text: "bound output" });
     const other = enqueueSystemEventReceipt(

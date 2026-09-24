@@ -295,19 +295,9 @@ export function enqueueSystemEventReceipt(
   const eventId = event.id;
   return {
     eventId,
-    remove: () => {
-      if (consumeSelectedSystemEventEntries(sessionKey, [event]).length > 0) {
-        return true;
-      }
-      // The canonical queue evicts its oldest entry above `MAX_EVENTS`, while a
-      // consumer's copy of this occurrence (an exec steering item) can be
-      // retained far longer. Notifying on this occurrence's globally-unique id
-      // settles that copy even though the queued entry is already gone, and
-      // cannot touch a re-enqueued occurrence that merely reused the context
-      // key. Returning false still reports that nothing was queued to remove.
-      notifySystemEventConsumption(sessionKey, [event]);
-      return false;
-    },
+    // Settles this exact occurrence by id even after eviction from the live
+    // queue; returns false when nothing was still queued to remove.
+    remove: () => consumeSelectedSystemEventEntries(sessionKey, [event]).length > 0,
   };
 }
 
@@ -379,25 +369,37 @@ export function consumeSelectedSystemEventEntries(
   consumedEntries: readonly SystemEvent[],
 ): SystemEvent[] {
   const key = requireSessionKey(sessionKey);
-  const entry = queues.get(key);
-  if (!entry || entry.queue.length === 0 || consumedEntries.length === 0) {
+  if (consumedEntries.length === 0) {
     return [];
   }
+  const entry = queues.get(key);
   const removed: SystemEvent[] = [];
-  for (const consumed of consumedEntries) {
-    const index = entry.queue.findIndex((event) => matchesConsumedSystemEvent(event, consumed));
-    if (index === -1) {
-      continue;
+  if (entry && entry.queue.length > 0) {
+    for (const consumed of consumedEntries) {
+      const index = entry.queue.findIndex((event) => matchesConsumedSystemEvent(event, consumed));
+      if (index === -1) {
+        continue;
+      }
+      const [event] = entry.queue.splice(index, 1);
+      if (event) {
+        removed.push(cloneSystemEvent(event));
+      }
     }
-    const [event] = entry.queue.splice(index, 1);
-    if (event) {
-      removed.push(cloneSystemEvent(event));
-    }
+    resetQueueState(key, entry);
   }
-  resetQueueState(key, entry);
-  // A single settlement fan-out: any consumer removing an occurrence lets the
-  // others invalidate their copies of the same durable id.
-  notifySystemEventConsumption(key, removed);
+  // A single settlement fan-out: any consumer settling an occurrence lets the
+  // others invalidate their copies of the same durable id. A caller settles the
+  // exact occurrences it saved (a heartbeat's prepared snapshot, a receipt), and
+  // newer events can evict one of those from the live queue before delivery
+  // finishes. Its steering copy is retained far longer than the canonical
+  // entry, so the saved id is settled even when it is no longer resident;
+  // otherwise the delivered completion would be reported again on a later turn.
+  // Ids are globally unique, so this can never retire a different occurrence.
+  const removedIds = new Set(removed.map((event) => event.id));
+  const settledElsewhere = consumedEntries.filter(
+    (consumed) => typeof consumed.id === "string" && !removedIds.has(consumed.id),
+  );
+  notifySystemEventConsumption(key, [...removed, ...settledElsewhere]);
   return removed;
 }
 
