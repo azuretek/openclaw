@@ -3,7 +3,16 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import * as agentIdentity from "../agents/identity.js";
 import * as catalogLookup from "../agents/model-catalog-lookup.js";
-import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import {
+  createConfigResolutionFacts,
+  setConfigResolutionFacts,
+} from "../config/resolution-facts.js";
+import {
+  getRuntimeConfigSnapshotMetadata,
+  resetConfigRuntimeState,
+  setRuntimeConfigSnapshot,
+  setRuntimeConfigSourceSnapshotIfCurrent,
+} from "../config/runtime-snapshot.js";
 import {
   assignSessionOwner,
   deleteSessionEntryLifecycle,
@@ -657,6 +666,31 @@ it("keeps projected rows clean when a config publication resolves to the publish
       // The same config published again is not a session-data change, so no row is
       // invalidated and no drain starts.
       setRuntimeConfigSnapshot(structuredClone(cfg));
+      expect(projection.dirtyRowCount).toBe(0);
+
+      // Equal values with different resolution provenance can resolve differently, so rows refresh.
+      const reresolved = structuredClone(cfg);
+      setConfigResolutionFacts(
+        reresolved,
+        createConfigResolutionFacts([
+          { varName: "UNIT_TEST_AGENT", configPath: "agents.list.0.id" },
+        ]),
+      );
+      setRuntimeConfigSnapshot(reresolved);
+      expect(projection.dirtyRowCount).toBeGreaterThan(0);
+      await projection.ensureMaterialized();
+      expect(projection.dirtyRowCount).toBe(0);
+
+      // A source-only republish copies provenance onto the published object in place, so it
+      // reaches rows through the same-object path.
+      expect(
+        setRuntimeConfigSourceSnapshotIfCurrent({
+          expectedRevision: getRuntimeConfigSnapshotMetadata()?.revision ?? 0,
+          sourceConfig: structuredClone(cfg),
+        }),
+      ).toBe(true);
+      expect(projection.dirtyRowCount).toBeGreaterThan(0);
+      await projection.ensureMaterialized();
       expect(projection.dirtyRowCount).toBe(0);
 
       // A real config change still dirties every row.

@@ -116,6 +116,56 @@ describe("prepared runtime snapshots", () => {
     expect(changes).toHaveBeenCalledExactlyOnceWith({ all: true, scope: "config" });
   });
 
+  const tokenConfig = (): OpenClawConfig => ({
+    gateway: { port: 18789, auth: { token: "unit-test-token" } },
+  });
+  const withTokenFacts = (config: OpenClawConfig, unresolvedPaths: string[]): OpenClawConfig => {
+    setConfigResolutionFacts(
+      config,
+      createConfigResolutionFacts(
+        unresolvedPaths.map((configPath) => ({ varName: "UNIT_TEST_TOKEN", configPath })),
+      ),
+    );
+    return config;
+  };
+
+  // Each case republishes after the same first publication: equal bytes, token path recorded as
+  // unresolved. Only a distinct object whose values and provenance both match is withheld.
+  it.each([
+    {
+      name: "withholds a distinct object with equal values and equal fresh provenance",
+      next: () => withTokenFacts(tokenConfig(), ["gateway.auth.token"]),
+      emits: false,
+    },
+    {
+      name: "invalidates the published object republished without an edit",
+      next: (published: OpenClawConfig) => published,
+      emits: true,
+    },
+    {
+      name: "invalidates equal bytes whose resolution provenance changed",
+      next: () => withTokenFacts(tokenConfig(), []),
+      emits: true,
+    },
+    {
+      name: "invalidates equal bytes that lost their resolution provenance",
+      next: () => tokenConfig(),
+      emits: true,
+    },
+  ])("$name", ({ next, emits }) => {
+    const changes = vi.fn();
+    unregister.push(sessionChanges.subscribe(changes));
+    const published = withTokenFacts(tokenConfig(), ["gateway.auth.token"]);
+    setRuntimeConfigSnapshot(published);
+    expect(changes).toHaveBeenCalledExactlyOnceWith({ all: true, scope: "config" });
+    changes.mockClear();
+
+    setRuntimeConfigSnapshot(next(published));
+    // Every case is still a publication; only the session change is conditional.
+    expect(getRuntimeConfigSnapshotMetadata()?.revision).toBe(2);
+    expect(changes).toHaveBeenCalledTimes(emits ? 1 : 0);
+  });
+
   it("invalidates sessions when a source-only republish reuses the published object", () => {
     const changes = vi.fn();
     unregister.push(sessionChanges.subscribe(changes));
