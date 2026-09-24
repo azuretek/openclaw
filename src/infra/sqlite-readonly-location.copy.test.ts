@@ -825,4 +825,30 @@ describe("sqlite read-only snapshot staging reuse", () => {
     }
     expect(fs.readdirSync(fixture.stagingRoot)).toEqual([]);
   });
+
+  it("reuses one private staging directory across asynchronous retries", async () => {
+    const fixture = createWalSourceFixture();
+    const allocated = countStagingAllocations(fixture.stagingRoot);
+    replaceSourceAfterFirstCopy(fixture.sourcePath);
+    let prepared: Awaited<ReturnType<typeof prepareSqliteReadOnlyLocationInProcess>> | undefined;
+    try {
+      prepared = await prepareSqliteReadOnlyLocationInProcess(
+        fixture.sourcePath,
+        fixture.stagingRoot,
+      );
+      expect(allocated).toHaveLength(1);
+      const sqlite = requireNodeSqlite();
+      const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
+      try {
+        expect(snapshot.prepare("SELECT count(*) AS rows FROM probe").get()).toEqual({ rows: 64 });
+      } finally {
+        snapshot.close();
+      }
+    } finally {
+      if (prepared) {
+        expect(await prepared.cleanupAsync()).toBe(true);
+      }
+    }
+    expect(fs.readdirSync(fixture.stagingRoot)).toEqual([]);
+  });
 });
