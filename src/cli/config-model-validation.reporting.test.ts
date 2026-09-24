@@ -150,4 +150,58 @@ describe("config model validation reporting", () => {
       'Cannot set model reference "${PROBE_FALLBACK}" at agents.defaults.model.fallbacks.0: Unable to resolve authored model reference. Run openclaw models list to list available models.',
     ]);
   });
+
+  it("keeps the expanded value hidden for a placeholder newly added at an agent path", async () => {
+    // A new agent-path ref is no longer a dependency, so env expansion alone must keep the
+    // resolver's words back: they quote the expanded value, not the placeholder the operator
+    // typed. The placeholder itself is the operator's text and is shown.
+    const resolveModelRef = vi.fn(async ({ ref }: ResolverInput) =>
+      ref.path.endsWith("fallbacks.0") ? "Unknown model: acme/private-model" : undefined,
+    );
+
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: {
+          entries: {
+            main: {
+              default: true,
+              model: { primary: "openai/gpt-5.4-mini", fallbacks: ["${PROBE_FALLBACK}"] },
+            },
+          },
+        },
+      },
+      previousConfig: {
+        agents: {
+          entries: { main: { default: true, model: { primary: "openai/gpt-5.4-mini" } } },
+        },
+      },
+      touchedPaths: [["agents", "entries", "main", "model"]],
+      env: { PROBE_FALLBACK: "acme/private-model" } as NodeJS.ProcessEnv,
+      resolveModelRef,
+      redactDependencyValues: true,
+    });
+
+    expect(result.errors).toEqual([
+      'Cannot set model reference "${PROBE_FALLBACK}" at agents.entries.main.model.fallbacks.0: Unable to resolve authored model reference. Run openclaw models list to list available models.',
+    ]);
+    expect(result.errors.join("\n")).not.toContain("acme/private-model");
+  });
+
+  it("keeps a ref redacted when only its agent id's case changed", async () => {
+    // The ownership check still marks a ref whose identity existed under a differently
+    // spelled agent id: the operator renamed the agent, not the ref, so it stays redacted.
+    const resolveModelRef = vi.fn(async (_params: ResolverInput) => "Unknown model: acme/nope");
+
+    const result = await checkTouchedTextModelRefs({
+      config: { agents: { entries: { ops: { default: true, model: "acme/nope" } } } },
+      previousConfig: { agents: { entries: { Ops: { default: true, model: "acme/nope" } } } },
+      touchedPaths: [["agents", "entries"]],
+      resolveModelRef,
+      redactDependencyValues: true,
+    });
+
+    expect(result.errors).toEqual([
+      'Cannot set model reference "<configured model reference>" at agents.entries.ops.model: Unable to resolve authored model reference. Run openclaw models list to list available models.',
+    ]);
+  });
 });
