@@ -8,7 +8,6 @@ import {
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import * as agentIdentity from "../agents/identity.js";
 import * as catalogLookup from "../agents/model-catalog-lookup.js";
-import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   createConfigResolutionFacts,
   setConfigResolutionFacts,
