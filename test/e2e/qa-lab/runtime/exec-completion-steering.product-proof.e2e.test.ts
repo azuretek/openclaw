@@ -8,8 +8,12 @@
  *   turn carries it to the provider exactly once.
  * - B: a heartbeat that fails at the provider leaves the completion pending, and
  *   the next turn delivers it.
- * - C: another agent sharing the literal session key never sends it.
- * - D: replacing the session store retires it before any later provider request.
+ * - C: another agent on the same Gateway never sends the owner's completion, and
+ *   the owner's next turn does.
+ * - D: replacing the session store retires a queued copy before any later provider
+ *   request.
+ * - E: replacing the session store after the next turn leased the copy makes that
+ *   turn refuse it before provider I/O.
  */
 import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
@@ -56,6 +60,38 @@ const ENV_KEYS = [
   "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
 ] as const;
 const PROOF_CHANNEL_ID = "exec-steering-proof";
+// In-process gate the proof plugin's before_agent_run hook waits on. That hook runs
+// after the prompt build leased the exec steering copy and before provider dispatch.
+const PROOF_GATE_SYMBOL = "openclaw.execSteeringProof.gate";
+type ProofGate = {
+  match: string;
+  reached: boolean;
+  hold: () => Promise<void>;
+  release: () => void;
+};
+function armProofGate(match: string): ProofGate {
+  let release = () => {};
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const gate: ProofGate = {
+    match,
+    reached: false,
+    hold: async () => {
+      gate.reached = true;
+      await released;
+    },
+    release,
+  };
+  (globalThis as Record<symbol, unknown>)[Symbol.for(PROOF_GATE_SYMBOL)] = gate;
+  return gate;
+}
+function releaseProofGate(): void {
+  const key = Symbol.for(PROOF_GATE_SYMBOL);
+  const gate = (globalThis as Record<symbol, unknown>)[key] as ProofGate | undefined;
+  gate?.release();
+  delete (globalThis as Record<symbol, unknown>)[key];
+}
 const STEERING_HEADER = "Background exec completions arrived since your last turn.";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let sequence = 0;
@@ -129,6 +165,12 @@ async function writeProofChannelPlugin(pluginDir: string, tracePath: string): Pr
       "          },",
       "        },",
       "      },",
+      "    });",
+      '    api.on("before_agent_run", async (event) => {',
+      `      const gate = globalThis[Symbol.for(${JSON.stringify(PROOF_GATE_SYMBOL)})];`,
+      '      if (gate && typeof event.prompt === "string" && event.prompt.includes(gate.match)) {',
+      "        await gate.hold();",
+      "      }",
       "    });",
       "  },",
       "};",
@@ -418,7 +460,16 @@ describe("exec completion steering product proof", () => {
             enabled: true,
             allow: [PROOF_CHANNEL_ID],
             load: { paths: [pluginDir] },
-            entries: { [PROOF_CHANNEL_ID]: { enabled: true } },
+            entries: {
+              [PROOF_CHANNEL_ID]: {
+                enabled: true,
+                // The lease gate observes the prompt, so it needs conversation access.
+                hooks: {
+                  allowConversationAccess: true,
+                  timeouts: { before_agent_run: 120_000 },
+                },
+              },
+            },
             slots: { memory: "none" },
           },
         } satisfies OpenClawConfig;
@@ -479,6 +530,24 @@ describe("exec completion steering product proof", () => {
           heartbeats
             .slice(from)
             .map((event) => `${event.status}${event.reason ? ":" + event.reason : ""}`);
+        // Redacted provider trace: the current turn's user text exactly as the
+        // loopback provider received it, with the temp root and ids masked.
+        const trace = (entry: ProviderRequest | undefined) =>
+          entry
+            ? {
+                providerRequest: entry.seq,
+                request: "POST /v1/responses",
+                httpStatus: entry.status,
+                currentTurnUserText: entry.lastUser
+                  .split(tempHome)
+                  .join("<tmp>")
+                  .replace(
+                    /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/giu,
+                    "<uuid>",
+                  )
+                  .slice(0, 900),
+              }
+            : { providerRequest: null };
         // Read the durable queue under the same agent-qualified key the Gateway
         // uses, so a literal key such as "global" resolves to its owner's queue.
         const durablePending = (key: string, phase: string, ownerAgentId = "main") => {
@@ -525,6 +594,7 @@ describe("exec completion steering product proof", () => {
           const delivered = requestFor("PROOF_FOLLOWUP A");
           const carriers = requests.filter((entry) => entry.lastUser.includes(marker("A")));
           proof("A.next-turn-provider-request", summary(delivered, "A"));
+          proof("A.provider-trace", trace(delivered));
           proof("A.settled", {
             providerRequestsCarryingCompletion: carriers.length,
             durableEventPending: durablePending(key, "A"),
@@ -582,6 +652,8 @@ describe("exec completion steering product proof", () => {
           failingHeartbeatMarker = undefined;
           const recovered = requestFor("PROOF_FOLLOWUP B");
           proof("B.next-turn-provider-request", summary(recovered, "B"));
+          proof("B.provider-trace.refused-heartbeat", trace(refused));
+          proof("B.provider-trace.recovery-turn", trace(recovered));
           proof("B.settled", {
             durableEventPending: durablePending(key, "B"),
             steeringPending: steeringPending(key),
@@ -591,83 +663,62 @@ describe("exec completion steering product proof", () => {
           expect(durablePending(key, "B")).toBe(false);
         }
 
-        // Phase C: two agents share the literal key "global". The exec tool cannot
-        // resolve an owner for an unqualified key in a multi-agent roster, so it fails
-        // closed before starting, and no completion exists for either agent to receive.
+        // Phase C: two agents on one Gateway. The owner runs an owner-qualified exec
+        // whose completion is really queued; the other agent's turn on the literal
+        // key must not carry it, and the owner's next turn must, exactly once.
         {
+          const ownerKey = "agent:research:global";
           const hb = heartbeats.length;
           holdPhases.add("C");
           const owner = await startRun({
             agentId: "research",
-            sessionKey: "global",
+            sessionKey: ownerKey,
             message: "PROOF_START C",
           });
-          await waitFor("held C follow-up", () => holds.has("C"));
-          // Record the queue the Gateway actually used for the literal key.
-          const candidates = [
-            ["global", "research"],
-            ["agent:research:global", "research"],
-            ["agent:research:main", "research"],
-            ["global", "main"],
-            ["agent:main:global", "main"],
-          ] as const;
-          let owned: readonly [string, string] | undefined;
-          try {
-            owned = await waitFor(
-              "exec C steering copy",
-              () => candidates.find(([key, agent]) => steeringPending(key, agent)),
-              20_000,
-            );
-          } catch {
-            owned = undefined;
-          }
-          proof("C.steering-queue", {
-            found: owned ?? null,
-            durable: candidates.map(([key, agent]) => [
-              key,
-              agent,
-              durablePending(key, "C", agent),
-            ]),
-          });
-          const ownerExecOutput =
-            requests.find(
-              (entry) => entry.kind === "held" && entry.lastUser.includes("PROOF_START C"),
-            )?.toolOutput ?? "";
-          proof("C.owner-exec-refused-before-start", {
-            failedClosed: ownerExecOutput.includes("has no explicit owner"),
-            toolOutputHead: ownerExecOutput.slice(0, 160),
+          await waitFor("held C follow-up", () => holds.has("C"), 120_000);
+          await waitFor("exec C durable event", () => durablePending(ownerKey, "C", "research"));
+          await waitFor("exec C steering copy", () => steeringPending(ownerKey, "research"));
+          proof("C.owner-exec-queued", {
+            ownerKey,
+            durableEventQueued: true,
+            steeringQueued: true,
+            foreignSteeringQueued: steeringPending("global", "main"),
+            foreignDurableQueued: durablePending("global", "C", "main"),
           });
           const foreign = await startRun({
             agentId: "main",
             sessionKey: "global",
             message: "PROOF_FOLLOWUP C foreign",
           });
-          let foreignRequest: ProviderRequest | undefined;
-          try {
-            foreignRequest = await waitFor(
-              "foreign request",
-              () => requestFor("PROOF_FOLLOWUP C foreign"),
-              20_000,
-            );
-          } catch {
-            proof("C.foreign-queued-behind-owner", {});
-          }
-          holds.get("C")?.();
-          proof("C.runs", { owner: await waitRun(owner), foreign: await waitRun(foreign) });
-          foreignRequest ??= requestFor("PROOF_FOLLOWUP C foreign");
+          proof("C.foreign-run", { status: await waitRun(foreign) });
+          const foreignRequest = requestFor("PROOF_FOLLOWUP C foreign");
           proof("C.foreign-agent-provider-request", summary(foreignRequest, "C"));
           const ownerNext = await startRun({
             agentId: "research",
-            sessionKey: "global",
+            sessionKey: ownerKey,
             message: "PROOF_FOLLOWUP C owner",
           });
-          proof("C.owner-run", { status: await waitRun(ownerNext) });
-          proof("C.owner-provider-request", summary(requestFor("PROOF_FOLLOWUP C owner"), "C"));
-          proof("C.heartbeats", { events: heartbeatsSince(hb) });
-          expect(ownerExecOutput).toContain("has no explicit owner");
-          expect(owned).toBeUndefined();
+          await new Promise((resolve) => {
+            setTimeout(resolve, 1_500);
+          });
+          holds.get("C")?.();
+          proof("C.owner-runs", { first: await waitRun(owner), next: await waitRun(ownerNext) });
+          const ownerRequest = requestFor("PROOF_FOLLOWUP C owner");
+          const carriers = requests.filter((entry) => entry.lastUser.includes(marker("C")));
+          proof("C.owner-provider-request", summary(ownerRequest, "C"));
+          proof("C.settled", {
+            providerRequestsCarryingCompletion: carriers.length,
+            carrierIsOwnerTurn: carriers[0]?.seq === ownerRequest?.seq,
+            durableEventPending: durablePending(ownerKey, "C", "research"),
+            steeringPending: steeringPending(ownerKey, "research"),
+            heartbeats: heartbeatsSince(hb),
+          });
+          expect(foreignRequest).toBeDefined();
           expect(foreignRequest?.lastUser ?? "").not.toContain(marker("C"));
-          expect(requestFor("PROOF_FOLLOWUP C owner")?.lastUser ?? "").not.toContain(marker("C"));
+          expect(ownerRequest?.lastUser).toContain(marker("C"));
+          expect(ownerRequest?.lastUser).toContain(STEERING_HEADER);
+          expect(carriers).toHaveLength(1);
+          expect(durablePending(ownerKey, "C", "research")).toBe(false);
         }
 
         // Phase D: replacing the session store retires the queued output.
@@ -708,6 +759,72 @@ describe("exec completion steering product proof", () => {
           expect(retired).toBe(true);
           expect(next?.lastUser ?? "").not.toContain(marker("D"));
         }
+        // Phase E: the next turn leases the completion, and the store is replaced while
+        // that turn waits in before_agent_run, after the lease and before dispatch. The
+        // lease loses authority, so no provider request may carry the completion.
+        {
+          const key = "agent:main:proof-lease";
+          holdPhases.add("E");
+          const first = await startRun({ sessionKey: key, message: "PROOF_START E" });
+          await waitFor("held E follow-up", () => holds.has("E"), 120_000);
+          await waitFor("exec E steering copy", () => steeringPending(key));
+          const gate = armProofGate("PROOF_FOLLOWUP E lease");
+          const second = await startRun({ sessionKey: key, message: "PROOF_FOLLOWUP E lease" });
+          holds.get("E")?.();
+          proof("E.first-run", { status: await waitRun(first) });
+          await waitFor("E follow-up paused after lease", () => gate.reached, 60_000);
+          const leased = {
+            // A leased copy is no longer listed as pending; the durable event still is.
+            steeringPending: steeringPending(key),
+            durableEventPending: durablePending(key, "E"),
+            followupProviderRequests: requests.filter((entry) =>
+              entry.lastUser.includes("PROOF_FOLLOWUP E lease"),
+            ).length,
+          };
+          proof("E.leased-before-dispatch", leased);
+          const snapshot = await client.request<{ hash: string }>("config.get", {});
+          await client.request("config.patch", {
+            baseHash: snapshot.hash,
+            raw: JSON.stringify({ session: { store: storeTemplate("store-c") } }),
+          });
+          let durableRetired = false;
+          try {
+            durableRetired = await waitFor(
+              "E durable retirement",
+              () => !durablePending(key, "E"),
+              20_000,
+            );
+          } catch {
+            durableRetired = false;
+          }
+          proof("E.store-replaced-while-leased", { durableRetired });
+          releaseProofGate();
+          const terminal = await client.request<Record<string, unknown>>(
+            "agent.wait",
+            { runId: second, timeoutMs: 180_000 },
+            { timeoutMs: 185_000 },
+          );
+          const carriers = requests.filter((entry) => entry.lastUser.includes(marker("E")));
+          proof("E.leased-turn-outcome", {
+            status: terminal.status ?? null,
+            terminal: JSON.stringify(terminal).split(tempHome).join("<tmp>").slice(0, 400),
+            followupProviderRequests: requests
+              .filter((entry) => entry.lastUser.includes("PROOF_FOLLOWUP E lease"))
+              .map((entry) => summary(entry, "E")),
+            providerRequestsCarryingCompletion: carriers.length,
+          });
+          const third = await startRun({ sessionKey: key, message: "PROOF_FOLLOWUP E next" });
+          proof("E.next-run", { status: await waitRun(third) });
+          const next = requestFor("PROOF_FOLLOWUP E next");
+          proof("E.next-turn-provider-request", summary(next, "E"));
+          expect(leased.steeringPending).toBe(false);
+          expect(leased.durableEventPending).toBe(true);
+          expect(leased.followupProviderRequests).toBe(0);
+          expect(durableRetired).toBe(true);
+          expect(carriers).toHaveLength(0);
+          expect(next?.lastUser ?? "").not.toContain(marker("E"));
+          expect(steeringPending(key)).toBe(false);
+        }
         proof("provider-requests", {
           total: requests.length,
           byKind: requests.reduce<Record<string, number>>((acc, entry) => {
@@ -729,6 +846,7 @@ describe("exec completion steering product proof", () => {
         });
         throw error;
       } finally {
+        releaseProofGate();
         for (const release of holds.values()) {
           release();
         }
