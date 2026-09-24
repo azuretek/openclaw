@@ -94,25 +94,12 @@ describe("tsgo core test shards", () => {
   });
 
   it("pins every dist-dependent test to a shard that actually owns it", () => {
-    const roots = (config: string) => {
-      const parsed = ts.getParsedCommandLineOfConfigFile(
-        path.resolve(config),
-        {},
-        {
-          ...ts.sys,
-          onUnRecoverableConfigFileDiagnostic: (diagnostic) => {
-            throw new Error(ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"));
-          },
-        },
+    // readNativeTypeScriptConfig throws on any config diagnostic, so a parse
+    // error fails the test rather than yielding an empty root list.
+    const roots = (config: string) =>
+      readNativeTypeScriptConfig({ cwd: process.cwd(), configFileName: config }).fileNames.map(
+        (file) => path.relative(process.cwd(), file).replaceAll(path.sep, "/"),
       );
-      if (!parsed) {
-        throw new Error(`Could not parse ${config}`);
-      }
-      expect(parsed.errors, config).toEqual([]);
-      return parsed.fileNames.map((file) =>
-        path.relative(process.cwd(), file).replaceAll(path.sep, "/"),
-      );
-    };
 
     expect(TSGO_CORE_TEST_DIST_DEPENDENT_FILES.length).toBeGreaterThan(0);
     for (const { file, shard } of TSGO_CORE_TEST_DIST_DEPENDENT_FILES) {
