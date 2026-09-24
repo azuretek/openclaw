@@ -585,9 +585,11 @@ describe("exec completion steering product proof", () => {
             steeringQueued: steeringPending(key),
           });
           const second = await startRun({ sessionKey: key, message: "PROOF_FOLLOWUP A" });
-          await new Promise((resolve) => {
-            setTimeout(resolve, 1_500);
-          });
+          // Release the held turn only once the exec's heartbeat wake has observed the
+          // busy session and deferred, so the follow-up turn is what delivers it.
+          await waitFor("A heartbeat deferred while busy", () =>
+            heartbeatsSince(hb).includes("skipped:requests-in-flight"),
+          );
           proof("A.heartbeats-while-busy", { events: heartbeatsSince(hb) });
           holds.get("A")?.();
           proof("A.runs", { first: await waitRun(first), second: await waitRun(second) });
@@ -635,9 +637,13 @@ describe("exec completion steering product proof", () => {
                 .some((event) => event.status !== "skipped" && event.ts >= Date.now() - 120_000),
             120_000,
           );
-          await new Promise((resolve) => {
-            setTimeout(resolve, 1_000);
-          });
+          // The failed heartbeat must leave both representations pending; wait for
+          // that state instead of a fixed settle delay.
+          await waitFor(
+            "B completion pending after refused heartbeat",
+            () => durablePending(key, "B") && steeringPending(key),
+            30_000,
+          );
           proof("B.heartbeat-refused-at-provider", {
             providerRequest: refused.seq,
             httpStatus: refused.status,
@@ -698,9 +704,9 @@ describe("exec completion steering product proof", () => {
             sessionKey: ownerKey,
             message: "PROOF_FOLLOWUP C owner",
           });
-          await new Promise((resolve) => {
-            setTimeout(resolve, 1_500);
-          });
+          await waitFor("C heartbeat deferred while owner busy", () =>
+            heartbeatsSince(hb).includes("skipped:requests-in-flight"),
+          );
           holds.get("C")?.();
           proof("C.owner-runs", { first: await waitRun(owner), next: await waitRun(ownerNext) });
           const ownerRequest = requestFor("PROOF_FOLLOWUP C owner");
