@@ -61,6 +61,68 @@ it("accepts an API key for a contract-less first-party id on the Platform route"
   });
 });
 
+function chatGPTOAuth() {
+  return {
+    type: "oauth" as const,
+    provider: "openai",
+    access: "***",
+    refresh: "***",
+    expires: Date.now() + 60_000,
+  };
+}
+
+// Before #148559 the offline ChatGPT catalog listed nano, so an unauthored setup
+// whose only credential is a ChatGPT login reached nano on the subscription route.
+// The Platform default must not take that route away.
+it("keeps an OAuth-only unauthored nano on the ChatGPT route", () => {
+  const plan = prepareAgentRuntimeAuthPlan({
+    ...codexNanoFixture(),
+    authProfileStore: authStore({ "openai:chatgpt": chatGPTOAuth() }),
+  });
+
+  expect(plan).toMatchObject({
+    forwardedAuthProfileId: "openai:chatgpt",
+    modelRoute: {
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      authRequirement: "subscription",
+    },
+  });
+});
+
+it("routes an API-key-only unauthored nano to the Platform API", () => {
+  const plan = prepareAgentRuntimeAuthPlan({
+    ...codexNanoFixture(),
+    authProfileStore: authStore({
+      "openai:platform": createApiKeyCredential("openai", "platform-key"),
+    }),
+  });
+
+  expect(plan).toMatchObject({
+    forwardedAuthProfileId: "openai:platform",
+    modelRoute: { api: "openai-responses", authRequirement: "api-key" },
+  });
+});
+
+it("prefers the Platform route for nano when both credentials are available", () => {
+  const plan = prepareAgentRuntimeAuthPlan({
+    ...codexNanoFixture(),
+    authProfileStore: authStore({
+      "openai:chatgpt": chatGPTOAuth(),
+      "openai:platform": createApiKeyCredential("openai", "platform-key"),
+    }),
+  });
+
+  expect(plan).toMatchObject({
+    forwardedAuthProfileId: "openai:platform",
+    modelRoute: {
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      authRequirement: "api-key",
+    },
+  });
+});
+
 it("keeps an authored ChatGPT adapter for nano on the subscription route", () => {
   const plan = prepareAgentRuntimeAuthPlan({
     ...codexNanoFixture(),

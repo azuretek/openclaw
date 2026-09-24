@@ -1361,7 +1361,9 @@ describe("modelsStatusCommand auth overview", () => {
     expect(textRuntime.exit).toHaveBeenCalledWith(1);
   });
 
-  it("resolves a contract-less first-party id onto the Platform route instead of leaving it indeterminate", async () => {
+  // An OAuth-only unauthored nano keeps the ChatGPT route it had through the
+  // offline ChatGPT catalog before #148559, so status reports it ready.
+  it("keeps an OAuth-only contract-less first-party id ready on the ChatGPT route", async () => {
     const localRuntime = createTestRuntime();
     await withOpenAIStatusFixture(
       {
@@ -1382,15 +1384,9 @@ describe("modelsStatusCommand auth overview", () => {
     );
 
     const payload = parseFirstJsonLog(localRuntime);
-    expect(payload.auth.missingProvidersInUse).toEqual(["openai"]);
-    expect(payload.auth.modelRouteIssues).toEqual([
-      expect.objectContaining({
-        kind: "missing-auth",
-        provider: "openai",
-        model: "gpt-5.4-nano",
-      }),
-    ]);
-    expect(localRuntime.exit).toHaveBeenCalledWith(1);
+    expect(payload.auth.missingProvidersInUse).toEqual([]);
+    expect(payload.auth.modelRouteIssues).toEqual([]);
+    expect(localRuntime.exit).not.toHaveBeenCalledWith(1);
   });
 
   it("uses static catalog transport observation for route readiness", async () => {
