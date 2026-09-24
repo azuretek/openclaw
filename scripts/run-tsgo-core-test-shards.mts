@@ -17,8 +17,7 @@ import { buildTsgoCoreTestTypedRuntimeDist } from "./lib/tsgo-core-test-dist-bui
 import {
   selectTsgoCoreTestShards,
   selectChangedTsgoCoreTestShards,
-  selectDistDependentTsgoCoreTestConfigs,
-  TSGO_CORE_TEST_DIST_DEPENDENT_FILES,
+  needsTypedRuntimeDistPreparation,
   TSGO_CORE_TEST_SHARDS,
   selectTsgoCoreTestStripe,
 } from "./lib/tsgo-core-test-shards.mts";
@@ -56,10 +55,7 @@ async function runTsgoCoreTestShards(
     // Gate on the file existing: synthetic fixtures select the full shard list
     // without carrying the real test, and must not start a build they cannot run.
     if (
-      selectDistDependentTsgoCoreTestConfigs(shards).length > 0 &&
-      TSGO_CORE_TEST_DIST_DEPENDENT_FILES.some((entry) =>
-        fs.existsSync(path.join(repoRoot, entry.file)),
-      )
+      needsTypedRuntimeDistPreparation(shards, (file) => fs.existsSync(path.join(repoRoot, file)))
     ) {
       const buildCode = await buildTsgoCoreTestTypedRuntimeDist(env, repoRoot);
       if (buildCode !== 0) {

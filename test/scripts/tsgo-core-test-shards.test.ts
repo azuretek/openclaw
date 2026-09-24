@@ -8,6 +8,7 @@ import {
   findTsgoCoreTestShardViolations,
   selectChangedTsgoCoreTestShards,
   selectDistDependentTsgoCoreTestConfigs,
+  needsTypedRuntimeDistPreparation,
   TSGO_CORE_GRAPHS,
   selectTsgoCoreTestShards,
   selectTsgoCoreTestStripe,
@@ -139,6 +140,44 @@ describe("tsgo core test shards", () => {
     const ownerNames = new Set(TSGO_CORE_TEST_DIST_DEPENDENT_FILES.map((entry) => entry.shard));
     const independent = TSGO_CORE_TEST_SHARDS.filter((shard) => !ownerNames.has(shard.name));
     expect(selectDistDependentTsgoCoreTestConfigs(independent)).toEqual([]);
+  });
+
+  it("reports the dist-dependent owner config only when its shard is selected", () => {
+    const ownerName = TSGO_CORE_TEST_DIST_DEPENDENT_FILES[0]!.shard;
+    const owners = TSGO_CORE_TEST_SHARDS.filter((shard) => shard.name === ownerName);
+    const independent = TSGO_CORE_TEST_SHARDS.filter((shard) => shard.name !== ownerName);
+    expect(owners).toHaveLength(1);
+    const owner = owners[0]!;
+
+    expect(selectDistDependentTsgoCoreTestConfigs([])).toEqual([]);
+    expect(selectDistDependentTsgoCoreTestConfigs(independent)).toEqual([]);
+    expect(selectDistDependentTsgoCoreTestConfigs([owner])).toEqual([owner.config]);
+    // A stripe that repeats the owner plans one preparation pass per shard config,
+    // not one per selected entry.
+    expect(selectDistDependentTsgoCoreTestConfigs([owner, owner])).toEqual([owner.config]);
+    expect(selectDistDependentTsgoCoreTestConfigs([...independent, owner])).toEqual([owner.config]);
+  });
+
+  it("prepares the typed runtime only for a selected owner whose file exists", () => {
+    const ownerName = TSGO_CORE_TEST_DIST_DEPENDENT_FILES[0]!.shard;
+    const owner = TSGO_CORE_TEST_SHARDS.find((shard) => shard.name === ownerName)!;
+    const independent = TSGO_CORE_TEST_SHARDS.filter((shard) => shard.name !== ownerName);
+    const present = () => true;
+    const absent = () => false;
+
+    expect(needsTypedRuntimeDistPreparation([], present)).toBe(false);
+    // A selection that owns no dist-dependent test never starts a build.
+    expect(needsTypedRuntimeDistPreparation(independent, present)).toBe(false);
+    // Synthetic fixtures select shards without carrying the real test file, so a
+    // selection that matches on names alone must not start a build either.
+    expect(needsTypedRuntimeDistPreparation([owner], absent)).toBe(false);
+    expect(needsTypedRuntimeDistPreparation(TSGO_CORE_TEST_SHARDS, absent)).toBe(false);
+    expect(needsTypedRuntimeDistPreparation([owner], present)).toBe(true);
+    expect(needsTypedRuntimeDistPreparation(TSGO_CORE_TEST_SHARDS, present)).toBe(true);
+    // The real checkout carries the file, so the owner selection prepares there.
+    expect(
+      needsTypedRuntimeDistPreparation([owner], (file) => fs.existsSync(path.resolve(file))),
+    ).toBe(true);
   });
 
   it("stripes partition the full shard list exactly once", () => {
@@ -520,6 +559,12 @@ process.exit(result.status??1);
       const renamed = await check([leaf, "src/agents/old.test.ts"]);
       expect(renamed.result.status, renamed.result.stderr).toBe(0);
       expect(renamed.builds).toEqual(TSGO_CORE_TEST_SHARDS.map((shard) => shard.config));
+      // That selection includes the owner shard, but the fixture carries no
+      // dist-dependent test, so the launcher must not start a preparation build
+      // inside the temp root.
+      expect(renamed.result.stdout + renamed.result.stderr).not.toContain(
+        "building typed runtime dist entries",
+      );
       write(leaf, "export type Value = string;\n");
       const brokenConsumer = await check();
       expect(brokenConsumer.result.status).not.toBe(0);

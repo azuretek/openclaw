@@ -166,6 +166,22 @@ export function selectDistDependentTsgoCoreTestConfigs(
     .filter((config): config is string => config !== undefined && selectedConfigs.has(config));
 }
 
+/**
+ * Whether the shard runner has to prepare the typed runtime dist entries for the
+ * shards it selected: one of them owns a dist-dependent file, and that file is
+ * present on disk. A synthetic fixture selects shards without carrying the real
+ * test, so the existence check keeps it from starting a build it cannot run.
+ */
+export function needsTypedRuntimeDistPreparation(
+  shards: readonly { name: string; config: string }[],
+  fileExists: (file: string) => boolean,
+): boolean {
+  if (selectDistDependentTsgoCoreTestConfigs(shards).length === 0) {
+    return false;
+  }
+  return TSGO_CORE_TEST_DIST_DEPENDENT_FILES.some((entry) => fileExists(entry.file));
+}
+
 export function selectTsgoCoreTestShards(
   requestedGroup?: string,
 ): readonly { name: string; config: string }[] | undefined {

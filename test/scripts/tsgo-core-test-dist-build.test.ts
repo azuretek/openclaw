@@ -1,10 +1,36 @@
 // Typed runtime preparation tests cover the runtime owners the prepare step restores.
 import { describe, expect, it } from "vitest";
 import { BUILD_ALL_STEPS, resolveBuildAllStep } from "../../scripts/build-all.mts";
+import { TSDOWN_UNIFIED_CONFIG_GROUP } from "../../scripts/lib/tsdown-config-groups.mts";
 import {
   buildTsgoCoreTestTypedRuntimeDist,
   listRestoredRuntimeSteps,
 } from "../../scripts/lib/tsgo-core-test-dist-build.mts";
+
+const recordingRunner = (
+  calls: Array<{ args: string[]; cwd?: string; env: NodeJS.ProcessEnv }>,
+  fail: (target: string) => number = () => 0,
+) =>
+  (async (params: { args: string[]; cwd?: string; env: NodeJS.ProcessEnv }) => {
+    calls.push(params);
+    return fail(params.args[3] ?? "");
+  }) as unknown as typeof import("../../scripts/lib/managed-child-process.mts").runManagedCommand;
+
+/** Repo-relative script each preparation child drives, decoded from its file URL. */
+const childTargets = (calls: Array<{ args: string[] }>, repoRoot = "/repo") =>
+  calls.map((call) => {
+    const url = new URL(call.args[3] ?? "");
+    expect(url.protocol).toBe("file:");
+    if (repoRoot.includes(" ")) {
+      // A checkout path with spaces stays a percent-encoded file URL; a raw space
+      // is what a Windows shell rejects when it routes the argument through cmd.exe.
+      expect(url.pathname).toContain("%20");
+      for (const arg of call.args) {
+        expect(arg).not.toContain(repoRoot);
+      }
+    }
+    return decodeURIComponent(url.pathname).slice(repoRoot.length + 1);
+  });
 
 describe("typed runtime declaration preparation", () => {
   it("restores the cleaned runtime artifacts through their canonical owners", async () => {
@@ -106,15 +132,99 @@ describe("typed runtime declaration preparation", () => {
 
   it("stops before restoring owners when the compile fails", async () => {
     const calls: unknown[] = [];
-    const failingRunner = (async (params: unknown) => {
+    const compileFails = (async (params: unknown) => {
       calls.push(params);
       return 7;
     }) as unknown as typeof import("../../scripts/lib/managed-child-process.mts").runManagedCommand;
 
-    const status = await buildTsgoCoreTestTypedRuntimeDist({}, "/repo", failingRunner);
+    const status = await buildTsgoCoreTestTypedRuntimeDist({}, "/repo", compileFails);
 
     expect(status).toBe(7);
     expect(calls).toHaveLength(1);
+  });
+
+  it("drives every child through the artifact entry in the measured order", async () => {
+    const calls: Array<{ args: string[]; cwd?: string; env: NodeJS.ProcessEnv }> = [];
+    const runner = recordingRunner(calls);
+
+    const status = await buildTsgoCoreTestTypedRuntimeDist({}, "/repo with spaces", runner);
+
+    expect(status).toBe(0);
+    expect(childTargets(calls, "/repo with spaces")).toEqual([
+      "scripts/tsdown-build.mts",
+      "scripts/bundled-plugin-assets.mts",
+      "scripts/tsdown-build.mts",
+      "scripts/build-external-plugin-local-dist.mts",
+      "scripts/bundled-plugin-assets.mts",
+      "scripts/runtime-postbuild.mts",
+      "scripts/write-typed-runtime-entry-dts.ts",
+    ]);
+    for (const call of calls) {
+      // Every child runs the artifact entry, which owns the dist output lock.
+      expect(call.args[1]).toMatch(/scripts[\\/]tsx\.mjs$/u);
+      expect(call.args[2]).toMatch(/dist-artifact-ownership\.(?:mts|mjs|js)$/u);
+      expect(call.cwd).toBe("/repo with spaces");
+    }
+    // The compile narrows the unified graph to the one config group it owns, and
+    // the declaration writer takes no extra arguments.
+    expect(calls[0]?.args.slice(4)).toEqual([
+      "--config",
+      "tsdown.config.ts",
+      "--filter",
+      TSDOWN_UNIFIED_CONFIG_GROUP,
+    ]);
+    expect(calls.at(-1)?.args.slice(4)).toEqual([]);
+    // The two asset phases are distinct children around the owners between them.
+    expect(calls[1]?.args.slice(4)).toEqual(["--phase", "build"]);
+    expect(calls[4]?.args.slice(4)).toEqual(["--phase", "copy"]);
+  });
+
+  it("hands every child the caller env and the flags its phase owns", async () => {
+    const calls: Array<{ args: string[]; cwd?: string; env: NodeJS.ProcessEnv }> = [];
+    const runner = recordingRunner(calls);
+
+    const status = await buildTsgoCoreTestTypedRuntimeDist(
+      { PATH: "/usr/bin", OPENCLAW_TEST_MARKER: "keep" },
+      "/repo",
+      runner,
+    );
+
+    expect(status).toBe(0);
+    // The compile cleans the shared output roots, so it must not remove declared
+    // outputs it cannot regenerate, and it must keep the precomputed CLI metadata
+    // that none of the restored owners rewrites.
+    expect(calls[0]?.env).toMatchObject({
+      PATH: "/usr/bin",
+      OPENCLAW_TEST_MARKER: "keep",
+      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+      OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
+    });
+    // Each restored owner takes the node fallback, so none starts a package
+    // manager child that would block on the shard runner's build lock.
+    for (const call of calls.slice(1, 6)) {
+      expect(call.env).toMatchObject({
+        PATH: "/usr/bin",
+        OPENCLAW_TEST_MARKER: "keep",
+        OPENCLAW_BUILD_ALL_NO_PNPM: "1",
+      });
+    }
+    // The declaration publish runs in the caller's env, without the build flags.
+    expect(calls[6]?.env).toEqual({ PATH: "/usr/bin", OPENCLAW_TEST_MARKER: "keep" });
+  });
+
+  it("returns the declaration publish failure that stops the shard runner", async () => {
+    const calls: Array<{ args: string[]; env: NodeJS.ProcessEnv }> = [];
+    const runner = recordingRunner(calls, (target) =>
+      decodeURIComponent(target).endsWith("write-typed-runtime-entry-dts.ts") ? 5 : 0,
+    );
+
+    const status = await buildTsgoCoreTestTypedRuntimeDist({}, "/repo", runner);
+
+    // The launcher returns this code before it runs any checker, so a publish
+    // failure fails the job instead of type-checking a declaration-less tree.
+    expect(status).toBe(5);
+    expect(childTargets(calls)).toHaveLength(7);
+    expect(childTargets(calls).at(-1)).toBe("scripts/write-typed-runtime-entry-dts.ts");
   });
 
   it("stops restoring owners after the first failing owner", async () => {
