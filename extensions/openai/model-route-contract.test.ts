@@ -27,6 +27,69 @@ describe("OpenAI model route contract", () => {
     ]);
   });
 
+  // #148559: gpt-5.4-nano has no static route contract. With nothing authored or
+  // observed it takes the Platform route alone; every authored or observed route
+  // keeps the answer it had before, and the dual-route sibling is unaffected.
+  it("routes gpt-5.4-nano to the Platform API only when nothing is authored or observed", () => {
+    expect(resolveUnconfiguredModel("gpt-5.4-nano")).toMatchObject({
+      kind: "routes",
+      routes: [
+        {
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          authRequirement: "api-key",
+        },
+      ],
+    });
+    expect(resolveUnconfiguredModel("gpt-5.4-mini")).toMatchObject({
+      kind: "routes",
+      routes: [
+        { api: "openai-responses", authRequirement: "api-key" },
+        { api: "openai-chatgpt-responses", authRequirement: "subscription" },
+      ],
+    });
+  });
+
+  it.each([
+    {
+      name: "authored Platform base URL",
+      context: { configuredProvider: { baseUrl: "https://api.openai.com/v1" } },
+      routes: [{ api: "openai-responses", authRequirement: "api-key" }],
+    },
+    {
+      name: "authored custom base URL",
+      context: { configuredProvider: { baseUrl: "https://relay.example.test/v1" } },
+      routes: [
+        {
+          api: "openai-completions",
+          baseUrl: "https://relay.example.test/v1",
+          authRequirement: "api-key",
+        },
+      ],
+    },
+    {
+      name: "authored ChatGPT adapter",
+      context: { configuredProvider: { api: "openai-chatgpt-responses" as const } },
+      routes: [{ api: "openai-chatgpt-responses", authRequirement: "subscription" }],
+    },
+    {
+      name: "observed ChatGPT row",
+      context: {
+        observedRoutes: [
+          {
+            api: "openai-chatgpt-responses" as const,
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+          },
+        ],
+      },
+      routes: [{ api: "openai-chatgpt-responses", authRequirement: "subscription" }],
+    },
+  ])("keeps the $name route for gpt-5.4-nano", ({ context, routes }) => {
+    expect(
+      resolveModelRoutes({ provider: "openai", modelId: "gpt-5.4-nano", ...context }),
+    ).toMatchObject({ kind: "routes", routes });
+  });
+
   it("preserves custom model spelling while matching built-in routes case-insensitively", () => {
     expect(normalizeOpenAIModelRouteId("  openai/Future-MODEL  ")).toBe("openai/Future-MODEL");
     expect(normalizeOpenAIModelRouteId("future-model")).toBe("future-model");

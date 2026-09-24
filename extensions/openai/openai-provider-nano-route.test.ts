@@ -49,5 +49,19 @@ describe("buildOpenAIProvider nano route", () => {
       api: "openai-chatgpt-responses",
       baseUrl: "https://chatgpt.com/backend-api/codex",
     });
+    // An authored ChatGPT adapter still redirects nano; only the implicit
+    // projection changed.
+    const authored = provider.resolveDynamicModel?.({
+      provider: "openai",
+      modelId: "gpt-5.4-nano",
+      modelRegistry: registry,
+      agentRuntimeId: "codex",
+      providerConfig: { api: "openai-chatgpt-responses", models: [] },
+    } as never);
+    expect(authored).toMatchObject({
+      id: "gpt-5.4-nano",
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    });
   });
 });
