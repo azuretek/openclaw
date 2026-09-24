@@ -166,27 +166,36 @@ describe("prepared runtime snapshots", () => {
     expect(changes).toHaveBeenCalledTimes(emits ? 1 : 0);
   });
 
-  it("invalidates sessions when a source-only republish reuses the published object", () => {
+  it("withholds a source-only republish only when runtime values and provenance are unchanged", () => {
     const changes = vi.fn();
     unregister.push(sessionChanges.subscribe(changes));
     const runtime: OpenClawConfig = { gateway: { port: 18789 } };
-    const source = (model: string): OpenClawConfig => ({
-      gateway: { port: 18789 },
-      agents: { defaults: { model } },
-    });
-    setRuntimeConfigSnapshot(runtime, source("unit-test/model"));
-    expect(changes).toHaveBeenCalledExactlyOnceWith({ all: true, scope: "config" });
-    changes.mockClear();
+    const source = (version: string, unresolvedPaths: string[] = []): OpenClawConfig =>
+      withTokenFacts(
+        { gateway: { port: 18789 }, meta: { lastTouchedVersion: version } },
+        unresolvedPaths,
+      );
+    const advance = (sourceConfig: OpenClawConfig) => {
+      changes.mockClear();
+      expect(
+        setRuntimeConfigSourceSnapshotIfCurrent({
+          expectedRevision: getRuntimeConfigSnapshotMetadata()?.revision ?? 0,
+          sourceConfig,
+        }),
+      ).toBe(true);
+      expect(getRuntimeConfigSourceSnapshot()).toBe(sourceConfig);
+      return changes.mock.calls.length;
+    };
+    setRuntimeConfigSnapshot(runtime, source("1"));
 
-    // The newer source copies its resolution facts onto the published object in place, so
-    // consumers can read changed provenance and the same-object publication still invalidates.
-    expect(
-      setRuntimeConfigSourceSnapshotIfCurrent({
-        expectedRevision: getRuntimeConfigSnapshotMetadata()?.revision ?? 0,
-        sourceConfig: source("unit-test/other"),
-      }),
-    ).toBe(true);
-    expect(changes).toHaveBeenCalledExactlyOnceWith({ all: true, scope: "config" });
+    // A value-identical config.apply only restamps the source's meta, so no row can change.
+    expect(advance(source("2"))).toBe(0);
+    // Changed provenance is copied onto the published object in place, so rows refresh.
+    expect(advance(source("3", ["gateway.port"]))).toBe(1);
+    // So does an in-place edit of the published object made since its last publication.
+    runtime.gateway = { port: 19001 };
+    expect(advance(source("4", ["gateway.port"]))).toBe(1);
+    expect(getRuntimeConfigSnapshot()).toBe(runtime);
   });
 
   it.each([
