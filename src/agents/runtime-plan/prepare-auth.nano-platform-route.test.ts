@@ -104,7 +104,9 @@ it("routes an API-key-only unauthored nano to the Platform API", () => {
   });
 });
 
-it("prefers the Platform route for nano when both credentials are available", () => {
+// Automatic selection prefers the subscription route when both credentials are
+// eligible (docs/providers/openai/runtimes), so a mixed setup keeps its billing.
+it("keeps the subscription preference for nano when both credentials are available", () => {
   const plan = prepareAgentRuntimeAuthPlan({
     ...codexNanoFixture(),
     authProfileStore: authStore({
@@ -114,11 +116,11 @@ it("prefers the Platform route for nano when both credentials are available", ()
   });
 
   expect(plan).toMatchObject({
-    forwardedAuthProfileId: "openai:platform",
+    forwardedAuthProfileId: "openai:chatgpt",
     modelRoute: {
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-      authRequirement: "api-key",
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      authRequirement: "subscription",
     },
   });
 });

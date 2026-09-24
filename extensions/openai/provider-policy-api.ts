@@ -483,14 +483,13 @@ function resolveSingleObservedModelRoute(
     // A first-party id without a static contract (gpt-5.4-nano) is served by the
     // Platform API, and an unauthored ChatGPT login reached it through the offline
     // ChatGPT catalog before that catalog stopped listing it. Offer both routes
-    // with Platform preferred, so an API key takes Platform and an OAuth-only
-    // setup keeps its subscription route; authored or observed routes above
-    // still redirect it.
+    // under the usual subscription preference: an API key alone takes Platform,
+    // a ChatGPT login keeps its route; authored or observed routes above still
+    // redirect it.
     if (isOpenAIProviderModernModelId(modelId)) {
       return {
         kind: "routes",
         defaultRuntimeId: defaultRuntimeIdForRoute(platformRoute, sourceBaseUrl),
-        preferredAuthRequirement: "api-key",
         routes: [platformRoute, chatGPTRoute],
       };
     }
@@ -707,9 +706,7 @@ export function resolveModelRoutes(
     }
   }
   const preferredAuthRequirement =
-    requirement ??
-    resolution.preferredAuthRequirement ??
-    (intent?.runtimeId === OPENAI_AGENT_RUNTIME_ID ? "api-key" : "subscription");
+    requirement ?? (intent?.runtimeId === OPENAI_AGENT_RUNTIME_ID ? "api-key" : "subscription");
   return {
     ...resolution,
     preferredAuthRequirement,

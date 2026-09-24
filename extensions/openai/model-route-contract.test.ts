@@ -28,13 +28,14 @@ describe("OpenAI model route contract", () => {
   });
 
   // #148559: gpt-5.4-nano has no static route contract. With nothing authored or
-  // observed it offers the Platform route first and keeps the ChatGPT route an
-  // OAuth-only setup already used; every authored or observed route keeps the
-  // answer it had before, and the dual-route sibling is unaffected.
-  it("offers gpt-5.4-nano both routes, Platform preferred, when nothing is authored or observed", () => {
+  // observed it offers the Platform route and keeps the ChatGPT route an
+  // OAuth-only setup already used, under the usual subscription preference;
+  // every authored or observed route keeps the answer it had before, and the
+  // dual-route sibling is unaffected.
+  it("offers gpt-5.4-nano both routes under the subscription preference when nothing is authored or observed", () => {
     expect(resolveUnconfiguredModel("gpt-5.4-nano")).toMatchObject({
       kind: "routes",
-      preferredAuthRequirement: "api-key",
+      preferredAuthRequirement: "subscription",
       routes: [
         {
           api: "openai-responses",
