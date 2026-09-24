@@ -35,21 +35,26 @@ export function steerExecCompletionToRequester(params: {
 }): void {
   const { session, sessionKey, status, output, durableEventId } = params;
   const eventRouting = session.eventRouting ?? {};
-  enqueueExecSteeringCompletion({
-    requesterSessionKey: resolveEventSessionKeyForPolicy(sessionKey, eventRouting),
-    ...(session.agentId ? { ownerAgentId: session.agentId } : {}),
-    // Shared occurrence identity with the durable system event enqueued in
-    // bash-tools.exec-runtime.ts (contextKey `exec:<sessionId>`).
-    occurrenceKey: `exec:${session.id}`,
-    // Bind to the durable event's globally-unique id so settlement on any path
-    // retires exactly this copy through the shared consumption observer.
-    ...(durableEventId ? { durableEventId } : {}),
-    execId: session.id.slice(0, 8),
-    status,
-    exitLabel: renderExecExitLabel(session),
-    text: output,
-    endedAt: Date.now(),
-  });
+  // Steer only an occurrence the durable queue accepted. Without its receipt the
+  // canonical event was refused (for example its session store is unavailable),
+  // and the steering copy fails closed with it; the wake below is unchanged.
+  if (durableEventId) {
+    enqueueExecSteeringCompletion({
+      requesterSessionKey: resolveEventSessionKeyForPolicy(sessionKey, eventRouting),
+      ...(session.agentId ? { ownerAgentId: session.agentId } : {}),
+      // Shared occurrence identity with the durable system event enqueued in
+      // bash-tools.exec-runtime.ts (contextKey `exec:<sessionId>`).
+      occurrenceKey: `exec:${session.id}`,
+      // Bind to the durable event's globally-unique id so settlement on any path
+      // retires exactly this copy through the shared consumption observer.
+      durableEventId,
+      execId: session.id.slice(0, 8),
+      status,
+      exitLabel: renderExecExitLabel(session),
+      text: output,
+      endedAt: Date.now(),
+    });
+  }
   const wakeOptions = scopedHeartbeatWakeOptionsForPolicy(
     sessionKey,
     {

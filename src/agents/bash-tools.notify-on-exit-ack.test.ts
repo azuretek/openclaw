@@ -6,6 +6,7 @@ import {
   setupTelegramHeartbeatPluginRuntimeForTests,
   withTempTelegramHeartbeatSandbox,
 } from "../infra/heartbeat-runner.test-utils.js";
+import { publishSystemEventStoreResolver } from "../infra/system-event-ownership.js";
 import {
   consumeSelectedSystemEventEntries,
   enqueueSystemEventEntry,
@@ -56,6 +57,7 @@ beforeEach(() => {
   vi.spyOn(Date, "now").mockReturnValue(now);
 });
 afterEach(() => {
+  publishSystemEventStoreResolver(undefined);
   resetProcessRegistryForTests();
   resetExecSteeringQueueForTest();
   resetSystemEventsForTest();
@@ -81,6 +83,22 @@ it("keeps selected-agent global completions scoped to their owner", async () => 
   });
   expect(peekSystemEventEntries("agent:research:global")).toHaveLength(1);
   expect(peekSystemEventEntries("agent:main:global")).toEqual([]);
+});
+
+it("steers nothing when the durable completion event is refused", async () => {
+  // The Gateway cannot resolve the session store, so the canonical event is
+  // dropped; the steering copy must fail closed with it.
+  publishSystemEventStoreResolver(() => {
+    throw new Error("store unavailable");
+  });
+  const process = await startNotifyRun();
+  await process.finish();
+
+  expect(peekSystemEventEntries(QUEUE_KEY)).toEqual([]);
+  expect(
+    hasPendingExecSteeringItems({ requesterSessionKey: QUEUE_KEY, ownerAgentId: "main" }),
+  ).toBe(false);
+  expect(requestHeartbeatMock).toHaveBeenCalled();
 });
 
 it("isolates identical completions across exact full-slug reuse", async () => {

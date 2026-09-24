@@ -301,6 +301,12 @@ function createExecSteeringRuntime(): ExecSteeringRuntime {
     // canonical enqueue resolves its store from the agent-qualified session key
     // alone, so the same call shape keeps both representations on one identity.
     const sessionStorePath = getSystemEventStorePath(queueKey);
+    // Fail closed with the canonical event: when the Gateway cannot resolve a
+    // current store for this key, the durable enqueue refuses the occurrence, so
+    // a steering copy would carry output the canonical path rejected.
+    if (!isSystemEventStoreCurrent(queueKey, sessionStorePath)) {
+      return undefined;
+    }
     const item: ExecSteeringQueueItem = {
       itemId,
       queueKey,
@@ -332,10 +338,20 @@ function createExecSteeringRuntime(): ExecSteeringRuntime {
       return [];
     }
     const pending: StoredItem[] = [];
-    for (const stored of queue.values()) {
+    for (const [itemId, stored] of queue) {
+      // A copy without store authority is revoked, never leased: leasing it would
+      // make the turn refuse its own prompt, and a release would return it to
+      // fail the next turn the same way.
+      if (!isSystemEventStoreCurrent(queueKey, stored.item.sessionStorePath)) {
+        queue.delete(itemId);
+        continue;
+      }
       if (stored.lease.status === "pending" || isStaleLease(stored.lease, now)) {
         pending.push(stored);
       }
+    }
+    if (queue.size === 0) {
+      queues.delete(queueKey);
     }
     return pending.toSorted(sortStoredItems);
   }

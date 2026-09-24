@@ -681,6 +681,44 @@ describe("exec-steering-queue", () => {
     expect(hasPendingExecSteeringItems({ requesterSessionKey })).toBe(false);
   });
 
+  it("refuses a copy whose session store the Gateway cannot resolve", () => {
+    // The durable event is refused for the same key, so a steering copy would
+    // deliver output the canonical path rejected and could never pass the
+    // lease-time store check.
+    publishSystemEventStoreResolver(() => {
+      throw new Error("store unavailable");
+    });
+    expect(
+      enqueueExecSteeringCompletion({
+        requesterSessionKey,
+        occurrenceKey: "exec:nostore01",
+        execId: "nostore01",
+        status: "completed",
+        exitLabel: "exit 0",
+        text: "job done",
+      }),
+    ).toBeUndefined();
+    expect(hasPendingExecSteeringItems({ requesterSessionKey })).toBe(false);
+  });
+
+  it("never leases a copy that lost store authority without a republish", () => {
+    let storePath = "/stores/first.db";
+    publishSystemEventStoreResolver(() => storePath);
+    enqueue({
+      occurrenceKey: "exec:drift01",
+      execId: "drift01",
+      durableEventId: "durable-drift01",
+    });
+    // The resolver now answers differently without the Gateway publishing a new
+    // selection, so no retirement ran. The copy must be dropped at lease time
+    // rather than leased with no authority, which would fail every turn.
+    storePath = "/stores/second.db";
+    expect(
+      leasePendingExecSteeringItems({ requesterSessionKey, leaseId: "run-1:exec-steering" }),
+    ).toBeUndefined();
+    expect(hasPendingExecSteeringItems({ requesterSessionKey })).toBe(false);
+  });
+
   it("keeps queued output when the same physical store is republished", () => {
     publishSystemEventStoreResolver(() => "/stores/same.db");
     enqueue({
