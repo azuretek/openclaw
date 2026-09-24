@@ -654,6 +654,35 @@ it("invalidates projected rows when the published config object is republished a
   });
 });
 
+it("invalidates projected rows when a distinct config matches an in-place edit of the published one", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: "agent:main:edited-in-place" },
+      { sessionId: "edited-in-place", updatedAt: 1 },
+    );
+    const release = projectionWork.retainSessionListForegroundWork();
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    try {
+      const published = structuredClone(cfg);
+      setRuntimeConfigSnapshot(published);
+      await projection.ensureMaterialized();
+      expect(projection.dirtyRowCount).toBe(0);
+
+      // Rows were built from the values published before the edit, so a distinct object
+      // carrying the edited values is a change against that publication, not a republish.
+      Object.assign(published.agents, { defaults: { model: "unit-test/model" } });
+      setRuntimeConfigSnapshot(structuredClone(published));
+      expect(projection.dirtyRowCount).toBeGreaterThan(0);
+    } finally {
+      await projection.ensureMaterialized();
+      projection.dispose();
+      release();
+      resetConfigRuntimeState();
+    }
+  });
+});
+
 it("keeps projected rows clean when config.apply rewrites a value-identical config", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } };

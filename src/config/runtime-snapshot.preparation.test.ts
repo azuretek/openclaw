@@ -152,6 +152,24 @@ describe("prepared runtime snapshots", () => {
       next: () => tokenConfig(),
       emits: true,
     },
+    {
+      name: "invalidates a distinct object matching values edited in place on the published one",
+      next: (published: OpenClawConfig) => {
+        published.gateway = { ...published.gateway, port: 19001 };
+        return withTokenFacts({ gateway: { ...tokenConfig().gateway, port: 19001 } }, [
+          "gateway.auth.token",
+        ]);
+      },
+      emits: true,
+    },
+    {
+      name: "invalidates a distinct object matching provenance changed in place on the published one",
+      next: (published: OpenClawConfig) => {
+        setConfigResolutionFacts(published, createConfigResolutionFacts([]));
+        return withTokenFacts(tokenConfig(), []);
+      },
+      emits: true,
+    },
   ])("$name", ({ next, emits }) => {
     const changes = vi.fn();
     unregister.push(sessionChanges.subscribe(changes));
@@ -195,6 +213,9 @@ describe("prepared runtime snapshots", () => {
     // So does an in-place edit of the published object made since its last publication.
     runtime.gateway = { port: 19001 };
     expect(advance(source("4", ["gateway.port"]))).toBe(1);
+    // And provenance changed in place, even when the newer source carries the same facts.
+    setConfigResolutionFacts(runtime, createConfigResolutionFacts([]));
+    expect(advance(source("5"))).toBe(1);
     expect(getRuntimeConfigSnapshot()).toBe(runtime);
   });
 

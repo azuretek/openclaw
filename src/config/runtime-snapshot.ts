@@ -148,6 +148,7 @@ export type RuntimeConfigSnapshotMetadata = {
 let runtimeConfigSnapshot: OpenClawConfig | null = null;
 let runtimeConfigSourceSnapshot: OpenClawConfig | null = null;
 let runtimeConfigSnapshotMetadata: RuntimeConfigSnapshotMetadata | null = null;
+let runtimeConfigPublishedFacts: ReturnType<typeof serializeConfigResolutionFacts> = null;
 let runtimeConfigAppliedHash: string | null = null;
 let runtimeConfigSnapshotRevision = 0;
 let runtimeConfigSnapshotGeneration = 0;
@@ -232,19 +233,21 @@ function publishRuntimeConfigSnapshot(
   sourceConfig?: OpenClawConfig,
   valuesUnchanged = false,
 ): void {
-  // A reload that resolves to the published snapshot is not session data changing.
-  const previous = runtimeConfigSnapshot;
+  const metadata = createRuntimeConfigSnapshotMetadata(config, sourceConfig);
+  const facts = serializeConfigResolutionFacts(config);
+  // Compare with what the previous publication recorded, since its object may have been edited
+  // in place; withhold only a distinct object matching that record, or a proven no-op.
+  const matchesPublished =
+    runtimeConfigSnapshot !== config &&
+    runtimeConfigSnapshotMetadata?.fingerprint === metadata.fingerprint &&
+    isDeepStrictEqual(runtimeConfigPublishedFacts, facts);
   runtimeConfigSnapshotGeneration += 1;
   clearExecutablePathCache();
   runtimeConfigSnapshot = config;
   runtimeConfigSourceSnapshot = sourceConfig ?? null;
-  runtimeConfigSnapshotMetadata = createRuntimeConfigSnapshotMetadata(config, sourceConfig);
-  // A same-object publication may follow an in-place edit or a provenance copy, so it
-  // invalidates unless its caller proved neither happened; a distinct, equivalent object is withheld.
-  if (
-    !valuesUnchanged &&
-    (previous === null || previous === config || !configSnapshotsMatch(previous, config))
-  ) {
+  runtimeConfigSnapshotMetadata = metadata;
+  runtimeConfigPublishedFacts = facts;
+  if (!valuesUnchanged && !matchesPublished) {
     sessionChanges.emit({ all: true, scope: "config" });
   }
 }
@@ -345,14 +348,12 @@ export function setRuntimeConfigSourceSnapshotIfCurrent(params: {
     return false;
   }
   const published = runtimeConfigSnapshot;
+  const sourceFacts = serializeConfigResolutionFacts(params.sourceConfig);
   // Rows read only the runtime object: a newer source changes them only through an in-place
   // edit since the last publication or through the provenance copied onto it here.
   const valuesUnchanged =
     hashRuntimeConfigValue(published) === runtimeConfigSnapshotMetadata.fingerprint &&
-    isDeepStrictEqual(
-      serializeConfigResolutionFacts(published),
-      serializeConfigResolutionFacts(params.sourceConfig),
-    );
+    isDeepStrictEqual(runtimeConfigPublishedFacts, sourceFacts);
   copyConfigResolutionFacts(params.sourceConfig, published);
   preparePublishedRuntimeConfigSnapshot(published, params.sourceConfig, valuesUnchanged);
   return true;
@@ -364,6 +365,7 @@ export function resetConfigRuntimeState(options: { preserveConfigEnv?: boolean }
   runtimeConfigSnapshot = null;
   runtimeConfigSourceSnapshot = null;
   runtimeConfigSnapshotMetadata = null;
+  runtimeConfigPublishedFacts = null;
   runtimeConfigAppliedHash = null;
   runtimeConfigSnapshotRevision = 0;
   resetPublishedConfigRuntimeEnv({ preserveOwnership: options.preserveConfigEnv });
