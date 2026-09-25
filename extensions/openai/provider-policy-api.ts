@@ -528,20 +528,21 @@ function resolveSingleObservedModelRoute(
     };
   }
 
+  // A first-party id without a static contract (gpt-5.4-nano) is served by the
+  // Platform API, and an unauthored ChatGPT login reached it through the offline
+  // ChatGPT catalog before that catalog stopped listing it. Offer both routes
+  // under the usual subscription preference: an API key alone takes Platform,
+  // a ChatGPT login keeps its route. The manifest catalog always carries a
+  // Platform row for it, so an observed Platform row is not route intent here;
+  // authored routes and an observed ChatGPT row above still redirect it.
+  if (!configuredRoute && isOpenAIProviderModernModelId(modelId)) {
+    return {
+      kind: "routes",
+      defaultRuntimeId: defaultRuntimeIdForRoute(platformRoute, sourceBaseUrl),
+      routes: [platformRoute, chatGPTRoute],
+    };
+  }
   if (!configuredRoute && !hasObservedRoute) {
-    // A first-party id without a static contract (gpt-5.4-nano) is served by the
-    // Platform API, and an unauthored ChatGPT login reached it through the offline
-    // ChatGPT catalog before that catalog stopped listing it. Offer both routes
-    // under the usual subscription preference: an API key alone takes Platform,
-    // a ChatGPT login keeps its route; authored or observed routes above still
-    // redirect it.
-    if (isOpenAIProviderModernModelId(modelId)) {
-      return {
-        kind: "routes",
-        defaultRuntimeId: defaultRuntimeIdForRoute(platformRoute, sourceBaseUrl),
-        routes: [platformRoute, chatGPTRoute],
-      };
-    }
     return {
       kind: "indeterminate",
       defaultRuntimeId:

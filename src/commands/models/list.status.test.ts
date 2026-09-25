@@ -1389,6 +1389,41 @@ describe("modelsStatusCommand auth overview", () => {
     expect(localRuntime.exit).not.toHaveBeenCalledWith(1);
   });
 
+  it("keeps an OAuth-only nano ready when the catalog observes only a Platform row", async () => {
+    const localRuntime = createTestRuntime();
+    await withOpenAIStatusFixture(
+      {
+        primary: "openai/gpt-5.4-nano",
+        profiles: {
+          "openai:subscription": {
+            type: "oauth",
+            provider: "openai",
+            access: "subscription-access",
+            refresh: "subscription-refresh",
+            expires: Date.now() + 10 * 60_000,
+          },
+        },
+        catalog: [
+          {
+            id: "gpt-5.4-nano",
+            name: "GPT 5.4 Nano",
+            provider: "openai",
+            api: "openai-responses",
+            baseUrl: "https://api.openai.com/v1",
+          },
+        ],
+      },
+      async () => {
+        await modelsStatusCommand({ json: true, check: true }, localRuntime);
+      },
+    );
+
+    const payload = parseFirstJsonLog(localRuntime);
+    expect(payload.auth.missingProvidersInUse).toEqual([]);
+    expect(payload.auth.modelRouteIssues).toEqual([]);
+    expect(localRuntime.exit).not.toHaveBeenCalledWith(1);
+  });
+
   it("uses static catalog transport observation for route readiness", async () => {
     const localRuntime = createTestRuntime();
     await withOpenAIStatusFixture(

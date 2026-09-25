@@ -90,6 +90,26 @@ it("keeps an OAuth-only unauthored nano on the ChatGPT route", () => {
   });
 });
 
+// The runtime model for nano carries the manifest catalog's Platform row, so the
+// planner sees an observed Platform transport even with nothing authored.
+it("keeps an OAuth-only nano on the ChatGPT route when a Platform row is observed", () => {
+  const plan = prepareAgentRuntimeAuthPlan({
+    ...codexNanoFixture(),
+    modelApi: "openai-responses",
+    modelBaseUrl: "https://api.openai.com/v1",
+    authProfileStore: authStore({ "openai:chatgpt": chatGPTOAuth() }),
+  });
+
+  expect(plan).toMatchObject({
+    forwardedAuthProfileId: "openai:chatgpt",
+    modelRoute: {
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      authRequirement: "subscription",
+    },
+  });
+});
+
 it("routes an API-key-only unauthored nano to the Platform API", () => {
   const plan = prepareAgentRuntimeAuthPlan({
     ...codexNanoFixture(),

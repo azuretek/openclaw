@@ -98,6 +98,25 @@ describe("OpenAI model route contract", () => {
     ).toMatchObject({ kind: "routes", routes });
   });
 
+  // The openai manifest catalog lists nano on the Platform transport, so the
+  // runtime always observes a Platform row for it. That row must not strip the
+  // ChatGPT route an OAuth-only setup relies on.
+  it("keeps both gpt-5.4-nano routes when only a Platform row is observed", () => {
+    expect(
+      resolveModelRoutes({
+        provider: "openai",
+        modelId: "gpt-5.4-nano",
+        observedRoutes: [{ api: "openai-responses", baseUrl: "https://api.openai.com/v1" }],
+      }),
+    ).toMatchObject({
+      kind: "routes",
+      routes: [
+        { api: "openai-responses", authRequirement: "api-key" },
+        { api: "openai-chatgpt-responses", authRequirement: "subscription" },
+      ],
+    });
+  });
+
   it("preserves custom model spelling while matching built-in routes case-insensitively", () => {
     expect(normalizeOpenAIModelRouteId("  openai/Future-MODEL  ")).toBe("openai/Future-MODEL");
     expect(normalizeOpenAIModelRouteId("future-model")).toBe("future-model");
