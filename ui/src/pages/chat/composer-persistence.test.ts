@@ -96,6 +96,22 @@ function reloadStorage(state: ComposerState) {
   vi.stubGlobal("sessionStorage", freshStorage);
 }
 
+// A reload runs a new page instance, which does not own the rows the previous
+// one left in flight. Rewrite the stored owner the way an earlier page's write
+// would read to this one.
+function reloadStorageFromEarlierPage(state: ComposerState) {
+  const storageKey = storageKeyForGateway(state.settings?.gatewayUrl);
+  const stored = sessionStorage.getItem(storageKey);
+  expect(stored).not.toBeNull();
+  const rewritten = stored!.replace(
+    /"liveDeliveryOwner":"[^"]*"/g,
+    '"liveDeliveryOwner":"earlier-page"',
+  );
+  const freshStorage = createStorageMock();
+  freshStorage.setItem(storageKey, rewritten);
+  vi.stubGlobal("sessionStorage", freshStorage);
+}
+
 function seedLegacySessions(
   sessions: Record<string, unknown>,
   gatewayUrl = "ws://gateway.test/control",
@@ -1167,6 +1183,7 @@ describe("chat composer persistence", () => {
     restoredError?: string;
   }>([
     { sendState: "sending", restoredState: "waiting-reconnect" },
+    { sendState: "submitting", restoredState: "waiting-idle" },
     {
       sendState: "waiting-model",
       restoredState: "failed",
@@ -1184,6 +1201,7 @@ describe("chat composer persistence", () => {
         ...(sendError ? { sendError } : {}),
       };
       expect(admitItem(state, item)).toBe(true);
+      reloadStorageFromEarlierPage(state);
       expect(loadChatComposerSnapshot(state, state.sessionKey)?.queue).toEqual([
         {
           ...item,
@@ -1192,6 +1210,30 @@ describe("chat composer persistence", () => {
           sessionKey: state.sessionKey,
           agentId: "lily",
         },
+      ]);
+    },
+  );
+
+  it.each(["sending", "submitting"] as const)(
+    "keeps a %s row in flight when the same page rewrites the outbox",
+    (sendState) => {
+      const state = createState();
+      const inFlight: ChatQueueItem = { ...reconnectItem("in-flight", 1), sendState };
+      expect(admitItem(state, inFlight)).toBe(true);
+      // The next message typed during the reply is the rewrite that used to
+      // downgrade the accepted send to waiting-reconnect on a live socket.
+      expect(
+        admitItem(state, { ...reconnectItem("typed-next", 2), sendState: "waiting-idle" }),
+      ).toBe(true);
+      expect(persistChatComposerState({ ...state, chatMessage: "still typing" })).toBe(true);
+      expect(
+        loadChatComposerSnapshot(state, state.sessionKey)?.queue?.map((item) => [
+          item.id,
+          item.sendState,
+        ]),
+      ).toEqual([
+        ["in-flight", sendState],
+        ["typed-next", "waiting-idle"],
       ]);
     },
   );

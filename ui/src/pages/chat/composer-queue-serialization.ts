@@ -1,7 +1,7 @@
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import {
   INTERRUPTED_SETTINGS_WAIT_ERROR,
-  normalizeStoredQueueItem,
+  normalizeLiveQueueItem,
   sameQueuedDeliveryVersion,
   type StoredComposerSession,
 } from "../../lib/chat/outbox-store-codec.ts";
@@ -66,7 +66,7 @@ function serializeQueueItem(item: ChatQueueItem): ChatQueueItem | null {
   if (item.attachments?.length && attachments.some((attachment) => attachment === null)) {
     return null;
   }
-  return normalizeStoredQueueItem({
+  return normalizeLiveQueueItem({
     ...item,
     attachments: attachments.length ? attachments : undefined,
     ...(item.sendState === "waiting-model" ? { sendError: INTERRUPTED_SETTINGS_WAIT_ERROR } : {}),

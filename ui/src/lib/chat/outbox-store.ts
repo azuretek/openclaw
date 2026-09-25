@@ -15,6 +15,7 @@ import { removeOutboxPayloads } from "./outbox-payload-store.runtime.ts";
 import {
   MAX_STORED_SESSIONS,
   normalizeStoredSession,
+  stampLiveDeliveryOwner,
   type StoredComposerSession,
 } from "./outbox-store-codec.ts";
 import { observeDraftRevision, rememberDraftRevision } from "./outbox-store-draft-state.ts";
@@ -620,7 +621,10 @@ export function writeStoredOutboxStore(
     recovery: store.recovery,
     ...(store.legacyReceipts ? { legacyReceipts: store.legacyReceipts } : {}),
   };
-  const payload = JSON.stringify(retainedStore);
+  const payload = JSON.stringify({
+    ...retainedStore,
+    sessions: stampLiveDeliveryOwner(retainedStore.sessions),
+  });
   // Verification precedes deleting any legacy source, including quota/no-op writes.
   storage.setItem(target.key, payload);
   if (storage.getItem(target.key) !== payload) {

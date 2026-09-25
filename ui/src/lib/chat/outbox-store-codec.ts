@@ -5,6 +5,7 @@ import { readChatWorkContext } from "../../../../src/chat/work-context.js";
 import { t } from "../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../i18n/locales/en-chat-message-metadata.ts";
 import { normalizeAgentId } from "../sessions/session-key.ts";
+import { generateUUID } from "../uuid.ts";
 import type {
   ChatAttachment,
   ChatGoalDraftMode,
@@ -26,6 +27,43 @@ export const MAX_STORED_QUEUE_ITEMS = 50;
 const MAX_RETAINED_QUEUE_ITEMS = MAX_STORED_SESSIONS * MAX_STORED_QUEUE_ITEMS;
 export const INTERRUPTED_SETTINGS_WAIT_ERROR =
   "Chat settings update was interrupted. Review and retry when ready.";
+
+// Every write and every read of the stored outbox passes through this codec, not
+// only the replay after a reload. An in-flight row must therefore keep its state
+// while the page that sent it is alive: downgrading it on every pass turned a send
+// the Gateway had already accepted into "waiting-reconnect" (the "Reconnected
+// before delivery was confirmed" row) as soon as the queue projection re-read the
+// store, while the socket never dropped, and the rows behind it then waited on a
+// reconnect that never came. Writes stamp in-flight rows with this page's owner,
+// and only rows another page instance left behind are downgraded. A real
+// disconnect is still handled by markQueuedChatSendsWaitingForReconnect.
+const LIVE_DELIVERY_OWNER = generateUUID();
+const LIVE_DELIVERY_OWNER_FIELD = "liveDeliveryOwner";
+
+function isLiveDeliveryState(sendState: unknown): boolean {
+  return sendState === "sending" || sendState === "submitting";
+}
+
+/** Marks in-flight rows as owned by this page instance for the next read. */
+export function stampLiveDeliveryOwner(
+  sessions: Record<string, StoredComposerSession>,
+): Record<string, StoredComposerSession> {
+  return Object.fromEntries(
+    Object.entries(sessions).map(([key, session]) => [
+      key,
+      session.queue?.some((item) => isLiveDeliveryState(item.sendState))
+        ? {
+            ...session,
+            queue: session.queue.map((item) =>
+              isLiveDeliveryState(item.sendState)
+                ? { ...item, [LIVE_DELIVERY_OWNER_FIELD]: LIVE_DELIVERY_OWNER }
+                : item,
+            ),
+          }
+        : session,
+    ]),
+  );
+}
 
 export type StoredComposerSession = {
   awaitingDefaults?: true;
@@ -91,7 +129,20 @@ function normalizeChatAttachment(value: unknown): ChatAttachment | null {
   return restored;
 }
 
+/** Reads a stored row; in-flight rows survive only when this page wrote them. */
 export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
+  return normalizeQueueItem(
+    value,
+    isRecord(value) && value[LIVE_DELIVERY_OWNER_FIELD] === LIVE_DELIVERY_OWNER,
+  );
+}
+
+/** Serializes a row this page is writing now, so its in-flight state is its own. */
+export function normalizeLiveQueueItem(value: unknown): ChatQueueItem | null {
+  return normalizeQueueItem(value, true);
+}
+
+function normalizeQueueItem(value: unknown, ownsLiveDelivery: boolean): ChatQueueItem | null {
   if (!isRecord(value)) {
     return null;
   }
@@ -216,9 +267,9 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
   if (entry.sendState === "steering" || entry.sendState === "executing-command") {
     item.sendState = "unconfirmed";
   } else if (entry.sendState === "submitting") {
-    item.sendState = "waiting-idle";
+    item.sendState = ownsLiveDelivery ? "submitting" : "waiting-idle";
   } else if (entry.sendState === "sending") {
-    item.sendState = "waiting-reconnect";
+    item.sendState = ownsLiveDelivery ? "sending" : "waiting-reconnect";
   } else if (
     entry.sendState === "failed" ||
     entry.sendState === "unconfirmed" ||
@@ -291,7 +342,7 @@ export function normalizeStoredSession(value: unknown): StoredComposerSession | 
   }
   const normalizedQueue = Array.isArray(entry.queue)
     ? entry.queue
-        .map(normalizeStoredQueueItem)
+        .map((item) => normalizeStoredQueueItem(item))
         .filter((item): item is ChatQueueItem => item !== null)
     : undefined;
   // v1 writers used bounded tombstones. Consume them while reading legacy
