@@ -33,6 +33,26 @@ type ExecuteDispatchReadyState = Extract<
   { status: "ready" }
 >["state"];
 
+type FinalReplySend = Awaited<ReturnType<ExecuteDispatchReadyState["sendFinalPayload"]>>;
+
+// This exact final's own receipt: its dispatcher outcome, block custody, or
+// routed transport result. A rejected outcome counts as undelivered.
+async function resolveFinalReplyDelivered(finalReply: FinalReplySend): Promise<boolean> {
+  if (finalReply.sessionWriterDeliveryRevoked) {
+    return false;
+  }
+  if (finalReply.blockDeliveryOutcome) {
+    return finalReply.blockDeliveryOutcome === "delivered";
+  }
+  if (finalReply.suppressionReason) {
+    return false;
+  }
+  if (finalReply.dispatcherOutcome) {
+    return (await finalReply.dispatcherOutcome.catch(() => undefined)) === "delivered";
+  }
+  return finalReply.routedFinalCount > 0;
+}
+
 export const needsTtsFallback = (clean: boolean, visible: string, fallback?: string) =>
   clean && !visible.trim() && Boolean(fallback?.trim());
 
@@ -63,14 +83,22 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     waitForPendingDirectBlockReplyDelivery,
   } = state;
   // Steered exec completions reached the model; the user has seen them only once
-  // this turn's reply is delivered. Registered first, so every exit below
-  // (including a throw) settles against the dispatcher's final outcome.
-  const execSteering: { replies?: readonly ReplyPayload[] } = {};
+  // this turn's own reply is delivered. Registered first, so every exit below
+  // (including a throw) settles against the dispatcher's final outcome. The
+  // run's source-delivery fact is read now, before finalization records its own
+  // completion, so a no-visible-reply notice sent below cannot stand in for it.
+  const execSteering: {
+    replies?: readonly ReplyPayload[];
+    finalDelivered: Array<Promise<boolean>>;
+  } = { finalDelivered: [] };
   if (pendingExecSteeringSettlements.length > 0) {
-    registerReplyDispatcherSettledTask(dispatcher, () => {
+    const sourceReplyDelivered =
+      state.replyOperationRunState.replyCompletion?.outcome === "delivered";
+    registerReplyDispatcherSettledTask(dispatcher, async () => {
       const delivered = isExecSteeringReplySettled({
         replies: execSteering.replies,
-        terminalDelivery: turnLedger.resolveTerminalDelivery(),
+        finalDelivered: await Promise.all(execSteering.finalDelivered),
+        sourceReplyDelivered,
         messageToolOnly: state.sourceReplyDeliveryMode === "message_tool_only",
       });
       for (const settlement of pendingExecSteeringSettlements) {
@@ -186,6 +214,9 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
             }
           : {}),
       });
+      if (pendingExecSteeringSettlements.length > 0) {
+        execSteering.finalDelivered.push(resolveFinalReplyDelivered(finalReply));
+      }
       if (heartbeatReply?.settle) {
         const settle = heartbeatReply.settle;
         const outcome =

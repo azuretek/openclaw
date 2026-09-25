@@ -5,6 +5,7 @@ import { clearAgentHarnesses } from "../../agents/harness/registry.js";
 import { withReplyDispatcher } from "../dispatch-dispatcher.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import { isExecSteeringReplySettled } from "./dispatch-from-config.exec-steering.js";
+import { buildNoVisibleReplyFallbackText } from "./dispatch-from-config.payloads.js";
 import {
   createHookCtx,
   emptyConfig,
@@ -205,6 +206,69 @@ describe("exec-steering delivery settlement", () => {
     expect(settle).toHaveBeenCalledExactlyOnceWith(false);
   });
 
+  it("keeps a steered completion when only the no-visible-reply notice is delivered", async () => {
+    const settle = vi.fn();
+    const delivered: string[] = [];
+    const dispatcher = createReplyDispatcher({
+      beforeDeliver: (payload) => (payload.text === "The build finished." ? null : payload),
+      deliver: async (payload) => {
+        delivered.push(payload.text ?? "");
+      },
+    });
+    const ctx = createHookCtx();
+    Object.assign(ctx, {
+      Provider: "discord",
+      Surface: "discord",
+      SessionKey: "agent:main:discord:direct:owner",
+      CommandSource: "native",
+    });
+
+    const result = await withReplyDispatcher({
+      dispatcher,
+      run: () =>
+        dispatchReplyFromConfig({
+          ctx,
+          cfg: emptyConfig,
+          dispatcher,
+          replyResolver: async (_ctx, opts) => {
+            opts?.onPendingExecSteering?.({ settle });
+            return { text: "The build finished." };
+          },
+        }),
+    });
+
+    // The turn-wide ledger now holds a delivered terminal notice; the
+    // completion-bearing final itself was cancelled, so the receipt releases.
+    expect(result.noVisibleReplyFallbackDelivered).toBe(true);
+    expect(delivered.some((text) => text.includes(buildNoVisibleReplyFallbackText()))).toBe(true);
+    expect(delivered).not.toContain("The build finished.");
+    expect(settle).toHaveBeenCalledExactlyOnceWith(false);
+  });
+
+  it("keeps a steered completion when a message-tool-only turn confirmed no send", async () => {
+    const settle = vi.fn();
+    const deliver = vi.fn();
+    const dispatcher = createReplyDispatcher({ deliver });
+
+    await withReplyDispatcher({
+      dispatcher,
+      run: () =>
+        dispatchReplyFromConfig({
+          ctx: createHookCtx(),
+          cfg: emptyConfig,
+          dispatcher,
+          replyOptions: { sourceReplyDeliveryMode: "message_tool_only" },
+          replyResolver: async (_ctx, opts) => {
+            opts?.onPendingExecSteering?.({ settle });
+            return { text: "The build finished." };
+          },
+        }),
+    });
+
+    expect(deliver).not.toHaveBeenCalled();
+    expect(settle).toHaveBeenCalledExactlyOnceWith(false);
+  });
+
   it("settles every receipt a multi-attempt turn handed over", async () => {
     const first = vi.fn();
     const second = vi.fn();
@@ -232,43 +296,52 @@ describe("exec-steering delivery settlement", () => {
 
 describe("isExecSteeringReplySettled", () => {
   it.each([
-    { name: "delivered final", replies: [{ text: "done" }], terminal: "delivered", expected: true },
+    { name: "delivered final", replies: [{ text: "done" }], finals: [true], expected: true },
+    { name: "failed final", replies: [{ text: "done" }], finals: [false], expected: false },
     {
-      name: "undelivered final",
-      replies: [{ text: "done" }],
-      terminal: "missing",
-      expected: false,
-    },
-    { name: "unsettled final", replies: [{ text: "done" }], terminal: "pending", expected: false },
-    { name: "deliberate silent reply", replies: [], terminal: "missing", expected: true },
-    {
-      name: "whitespace-only reply",
-      replies: [{ text: "  " }],
-      terminal: "missing",
+      name: "one of two finals delivered",
+      replies: [{ text: "a" }, { text: "b" }],
+      finals: [false, true],
       expected: true,
     },
-    {
-      name: "finalization never reached",
-      replies: undefined,
-      terminal: "delivered",
-      expected: false,
-    },
-  ] as const)("$name -> $expected", ({ replies, terminal, expected }) => {
+    { name: "final never sent", replies: [{ text: "done" }], finals: [], expected: false },
+    { name: "deliberate silent reply", replies: [], finals: [], expected: true },
+    { name: "whitespace-only reply", replies: [{ text: "  " }], finals: [], expected: true },
+    { name: "finalization never reached", replies: undefined, finals: [true], expected: false },
+  ] as const)("$name -> $expected", ({ replies, finals, expected }) => {
     expect(
       isExecSteeringReplySettled({
         replies: replies ? [...replies] : undefined,
-        terminalDelivery: terminal,
+        finalDelivered: [...finals],
+        sourceReplyDelivered: false,
         messageToolOnly: false,
       }),
     ).toBe(expected);
   });
 
-  it("treats message-tool-only delivery as consumed by the model's own send", () => {
+  it.each([
+    { name: "confirmed current-source send", sourceReplyDelivered: true, expected: true },
+    { name: "no confirmed send", sourceReplyDelivered: false, expected: false },
+  ])("message-tool-only turn with $name -> $expected", ({ sourceReplyDelivered, expected }) => {
+    for (const replies of [[], [{ text: "done" }]]) {
+      expect(
+        isExecSteeringReplySettled({
+          replies,
+          finalDelivered: [],
+          sourceReplyDelivered,
+          messageToolOnly: true,
+        }),
+      ).toBe(expected);
+    }
+  });
+
+  it("accepts the run's settled source delivery for a directly delivered reply", () => {
     expect(
       isExecSteeringReplySettled({
         replies: [{ text: "done" }],
-        terminalDelivery: "missing",
-        messageToolOnly: true,
+        finalDelivered: [],
+        sourceReplyDelivered: true,
+        messageToolOnly: false,
       }),
     ).toBe(true);
   });

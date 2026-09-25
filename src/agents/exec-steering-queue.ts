@@ -620,17 +620,7 @@ function createExecSteeringRuntime(): ExecSteeringRuntime {
 
 // A single process-wide queue shared with source-transformed plugins, matching
 // the subagent steering and session-event-wake singletons.
-export const {
-  enqueueExecSteeringCompletion,
-  leasePendingExecSteeringItems,
-  ackLeasedExecSteeringItems,
-  releaseLeasedExecSteeringItems,
-  holdLeasedExecSteeringForDelivery,
-  hasPendingExecSteeringItems,
-  invalidateExecSteeringByDurableEventId,
-  retireExecSteeringForSessionKeys,
-  resetExecSteeringQueueForTest,
-} = resolveGlobalSingleton(
+const execSteeringRuntime = resolveGlobalSingleton(
   EXEC_STEERING_QUEUE_KEY,
   createExecSteeringRuntime,
   // Production lifecycle cleanup, mirroring the canonical system-event queues'
@@ -641,6 +631,17 @@ export const {
   (runtime) => runtime.resetExecSteeringQueueForTest(),
   "close-only",
 );
+
+export const {
+  enqueueExecSteeringCompletion,
+  leasePendingExecSteeringItems,
+  ackLeasedExecSteeringItems,
+  releaseLeasedExecSteeringItems,
+  hasPendingExecSteeringItems,
+  invalidateExecSteeringByDurableEventId,
+  retireExecSteeringForSessionKeys,
+  resetExecSteeringQueueForTest,
+} = execSteeringRuntime;
 
 // Route every durable-event consumer through one settlement observer: when the
 // system-event queue consumes an occurrence on any path (heartbeat settlement,
@@ -713,7 +714,7 @@ export function holdExecSteeringForDelivery(lease: {
 }): ExecSteeringDeliverySettlement | undefined {
   const itemIds = [...lease.itemIds];
   const { leaseId } = lease;
-  if (holdLeasedExecSteeringForDelivery({ itemIds, leaseId }) === 0) {
+  if (execSteeringRuntime.holdLeasedExecSteeringForDelivery({ itemIds, leaseId }) === 0) {
     return undefined;
   }
   let settled = false;
