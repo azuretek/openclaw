@@ -1,7 +1,10 @@
 // Reads and copies a pinned SQLite source file without touching its sidecars.
 import fs, { type BigIntStats } from "node:fs";
-import { copyFileDescriptorSync } from "@openclaw/fs-safe/advanced";
-import { sameFileContentsSync, sameFileIdentity } from "./fs-safe-advanced.js";
+import {
+  copyFileDescriptorSync,
+  sameFileContentsSync,
+  sameFileIdentity,
+} from "@openclaw/fs-safe/advanced";
 
 const SQLITE_HEADER_BYTES = 20;
 
