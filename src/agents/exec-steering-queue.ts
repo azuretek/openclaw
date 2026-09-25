@@ -110,7 +110,12 @@ type ExecSteeringQueueItem = {
 };
 
 type LeaseState = {
-  status: "pending" | "in_progress" | "delivered";
+  /**
+   * `awaiting_delivery`: the provider request carrying this copy was dispatched
+   * and the reply that folds it in has not yet settled at its delivery owner.
+   * It is never re-leased (not stale-eligible); that owner acks or releases it.
+   */
+  status: "pending" | "in_progress" | "awaiting_delivery";
   leaseId?: string;
   leasedAt?: number;
 };
@@ -155,6 +160,10 @@ type ExecSteeringRuntime = {
     itemIds: readonly string[];
     leaseId: string;
   }) => number;
+  holdLeasedExecSteeringForDelivery: (params: {
+    itemIds: readonly string[];
+    leaseId: string;
+  }) => number;
   hasPendingExecSteeringItems: (params: {
     requesterSessionKey: string;
     ownerAgentId?: string;
@@ -190,6 +199,13 @@ function isStaleLease(lease: LeaseState, now: number): boolean {
     lease.status === "in_progress" &&
     typeof lease.leasedAt === "number" &&
     now - lease.leasedAt > STALE_EXEC_STEERING_LEASE_MS
+  );
+}
+
+function isHeldByLease(lease: LeaseState, leaseId: string): boolean {
+  return (
+    (lease.status === "in_progress" || lease.status === "awaiting_delivery") &&
+    lease.leaseId === leaseId
   );
 }
 
@@ -458,11 +474,7 @@ function createExecSteeringRuntime(): ExecSteeringRuntime {
     for (const itemId of params.itemIds) {
       for (const queue of queues.values()) {
         const stored = queue.get(itemId);
-        if (
-          stored &&
-          stored.lease.status === "in_progress" &&
-          stored.lease.leaseId === params.leaseId
-        ) {
+        if (stored && isHeldByLease(stored.lease, params.leaseId)) {
           // Delivered items are removed so a later ack cannot re-deliver them.
           queue.delete(itemId);
           // Collect exactly the durable occurrence this lease carried, by its
@@ -502,12 +514,8 @@ function createExecSteeringRuntime(): ExecSteeringRuntime {
     for (const itemId of params.itemIds) {
       for (const queue of queues.values()) {
         const stored = queue.get(itemId);
-        if (
-          stored &&
-          stored.lease.status === "in_progress" &&
-          stored.lease.leaseId === params.leaseId
-        ) {
-          // Re-queue for the next turn on abort/failure.
+        if (stored && isHeldByLease(stored.lease, params.leaseId)) {
+          // Re-queue for the next turn on abort, failure, or undelivered reply.
           stored.lease.status = "pending";
           stored.lease.leaseId = undefined;
           stored.lease.leasedAt = undefined;
@@ -517,6 +525,27 @@ function createExecSteeringRuntime(): ExecSteeringRuntime {
       }
     }
     return updated;
+  }
+
+  function holdLeasedExecSteeringForDelivery(params: {
+    itemIds: readonly string[];
+    leaseId: string;
+  }): number {
+    let held = 0;
+    for (const itemId of params.itemIds) {
+      const found = findStored(itemId);
+      if (
+        found &&
+        found.stored.lease.status === "in_progress" &&
+        found.stored.lease.leaseId === params.leaseId
+      ) {
+        // Dispatched to the provider: keep the copy (and its durable event) out
+        // of the stale re-lease sweep until the reply's delivery settles.
+        found.stored.lease.status = "awaiting_delivery";
+        held += 1;
+      }
+    }
+    return held;
   }
 
   function invalidateExecSteeringByDurableEventId(durableEventId: string): number {
@@ -581,6 +610,7 @@ function createExecSteeringRuntime(): ExecSteeringRuntime {
     leasePendingExecSteeringItems,
     ackLeasedExecSteeringItems,
     releaseLeasedExecSteeringItems,
+    holdLeasedExecSteeringForDelivery,
     hasPendingExecSteeringItems,
     invalidateExecSteeringByDurableEventId,
     retireExecSteeringForSessionKeys,
@@ -595,6 +625,7 @@ export const {
   leasePendingExecSteeringItems,
   ackLeasedExecSteeringItems,
   releaseLeasedExecSteeringItems,
+  holdLeasedExecSteeringForDelivery,
   hasPendingExecSteeringItems,
   invalidateExecSteeringByDurableEventId,
   retireExecSteeringForSessionKeys,
@@ -659,6 +690,46 @@ export function ensureExecSteeringConsumptionObserver(): void {
 function unregisterExecSteeringConsumptionObserver(): void {
   unregisterConsumptionObserver?.();
   unregisterConsumptionObserver = undefined;
+}
+
+/**
+ * Settles one dispatched exec-steering lease at the reply's delivery owner.
+ * `delivered` retires the copy and its durable event; anything else returns
+ * both to pending, so a later turn or the idle heartbeat recovers the
+ * completion. Idempotent: only the first call has an effect.
+ */
+export type ExecSteeringDeliverySettlement = {
+  settle: (delivered: boolean) => void;
+};
+
+/**
+ * Moves a dispatched lease into `awaiting_delivery` and returns its exact
+ * settlement receipt, or undefined when no item is still held by the lease
+ * (for example, a heartbeat already consumed the durable event).
+ */
+export function holdExecSteeringForDelivery(lease: {
+  itemIds: readonly string[];
+  leaseId: string;
+}): ExecSteeringDeliverySettlement | undefined {
+  const itemIds = [...lease.itemIds];
+  const { leaseId } = lease;
+  if (holdLeasedExecSteeringForDelivery({ itemIds, leaseId }) === 0) {
+    return undefined;
+  }
+  let settled = false;
+  return {
+    settle: (delivered) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (delivered) {
+        ackLeasedExecSteeringItems({ itemIds, leaseId });
+      } else {
+        releaseLeasedExecSteeringItems({ itemIds, leaseId });
+      }
+    },
+  };
 }
 
 /** Prepends an exec-steering prompt to an existing user prompt when items exist. */

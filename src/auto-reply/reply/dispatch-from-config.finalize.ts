@@ -1,5 +1,5 @@
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
-import { resolveReplyCompletion } from "../../agents/reply-completion.js";
+import { resolveReplyCompletion, type ReplyDeliveryState } from "../../agents/reply-completion.js";
 import { recordAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -35,6 +35,26 @@ type ExecuteDispatchReadyState = Extract<
 export const needsTtsFallback = (clean: boolean, visible: string, fallback?: string) =>
   clean && !visible.trim() && Boolean(fallback?.trim());
 
+/**
+ * Whether a turn that folded in steered exec completions settled its reply.
+ * A delivered final retires them; a failed, cancelled, or suppressed final
+ * returns them for recovery. A turn with no outbound reply content (a
+ * deliberate silent reply) or message-tool-only delivery consumed them itself.
+ */
+export function isExecSteeringReplySettled(params: {
+  replies: readonly ReplyPayload[] | undefined;
+  terminalDelivery: ReplyDeliveryState;
+  messageToolOnly: boolean;
+}): boolean {
+  if (!params.replies) {
+    return false;
+  }
+  if (params.terminalDelivery === "delivered" || params.messageToolOnly) {
+    return true;
+  }
+  return !params.replies.some((reply) => hasOutboundReplyContent(reply, { trimText: true }));
+}
+
 export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState) {
   const {
     cfg,
@@ -49,6 +69,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     markInboundDedupeReplayUnsafe,
     pendingContinuation,
     pendingContinuationSettlement,
+    pendingExecSteeringSettlements = [],
     replyResult,
     replyRoute,
     routeReplyToOriginating,
@@ -60,6 +81,22 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     turnLedger,
     waitForPendingDirectBlockReplyDelivery,
   } = state;
+  // Steered exec completions reached the model; the user has seen them only once
+  // this turn's reply is delivered. Registered first, so every exit below
+  // (including a throw) settles against the dispatcher's final outcome.
+  const execSteering: { replies?: readonly ReplyPayload[] } = {};
+  if (pendingExecSteeringSettlements.length > 0) {
+    registerReplyDispatcherSettledTask(dispatcher, () => {
+      const delivered = isExecSteeringReplySettled({
+        replies: execSteering.replies,
+        terminalDelivery: turnLedger.resolveTerminalDelivery(),
+        messageToolOnly: state.sourceReplyDeliveryMode === "message_tool_only",
+      });
+      for (const settlement of pendingExecSteeringSettlements) {
+        settlement.settle(delivered);
+      }
+    });
+  }
   const heartbeat = state.replyOperationRunState.heartbeat;
   const pendingFinalOptions = { preserveActivity: heartbeat !== undefined };
   throwIfDispatchOperationAborted();
@@ -74,6 +111,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
         ? replyResult
         : [replyResult]
       : [];
+  execSteering.replies = replies;
   const pendingFinalDeliveryIdentity = replies
     .map((reply) => getReplyPayloadMetadata(reply)?.pendingFinalDeliveryCompletion)
     .find((completion) => completion !== undefined);

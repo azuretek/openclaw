@@ -7,6 +7,8 @@ import type { ImageContent } from "../../../llm/types.js";
 import type { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
 import {
   ackLeasedExecSteeringItems,
+  type ExecSteeringDeliverySettlement,
+  holdExecSteeringForDelivery,
   releaseLeasedExecSteeringItems,
 } from "../../exec-steering-queue.js";
 import type { AgentMessage } from "../../runtime/index.js";
@@ -96,6 +98,12 @@ export async function submitEmbeddedAttemptPrompt(input: {
   onFinalPromptText: (prompt: string) => void;
   onSteeringAcknowledged: () => void;
   onExecSteeringAcknowledged: () => void;
+  /**
+   * Delivery owner for a dispatched exec-steering lease. When present, the
+   * lease is held until that owner settles the reply's final delivery instead
+   * of being acknowledged as soon as the prompt returns.
+   */
+  onExecSteeringDispatched?: (settlement: ExecSteeringDeliverySettlement) => void;
   persistToolResultProjections: () => Promise<void>;
   prependContext?: string;
   promptActiveSession: PromptActiveSession;
@@ -246,7 +254,18 @@ export async function submitEmbeddedAttemptPrompt(input: {
       input.onSteeringAcknowledged();
     }
     if (input.leasedExecSteering) {
-      if (execSteeringDispatched) {
+      if (execSteeringDispatched && input.onExecSteeringDispatched) {
+        // The model has the completion, but the user has not seen the reply yet.
+        // Hand the exact receipt to the delivery owner, which acks it only once
+        // the final reply is delivered and releases it on a failed or
+        // suppressed send.
+        const settlement = holdExecSteeringForDelivery(input.leasedExecSteering);
+        if (settlement) {
+          input.onExecSteeringDispatched(settlement);
+        }
+      } else if (execSteeringDispatched) {
+        // No delivery owner (cron, subagent, direct agent command): the run's
+        // own output is the delivery, so the prompt returning settles it.
         ackLeasedExecSteeringItems(input.leasedExecSteering);
       } else {
         // The prompt was handled before provider dispatch: return the lease so

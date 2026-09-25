@@ -439,6 +439,9 @@ export async function runEmbeddedAttemptPromptPhase(
         onExecSteeringAcknowledged: () => {
           leasedExecSteering = undefined;
         },
+        ...(attempt.onPendingExecSteering
+          ? { onExecSteeringDispatched: attempt.onPendingExecSteering }
+          : {}),
         persistToolResultProjections: async () => {
           if (!isRawModelRun && toolResultPromptProjectionState.frozen.size > 0) {
             await withOwnedTranscriptWrite(() =>

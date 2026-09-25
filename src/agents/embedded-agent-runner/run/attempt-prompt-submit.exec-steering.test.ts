@@ -15,6 +15,7 @@ import {
 } from "../../../infra/system-events.js";
 import {
   enqueueExecSteeringCompletion,
+  type ExecSteeringDeliverySettlement,
   leasePendingExecSteeringItems,
   prependExecSteeringPrompt,
   resetExecSteeringQueueForTest,
@@ -147,6 +148,80 @@ it("delivers the owning agent's completion into the provider request exactly onc
     }),
   ).toBeUndefined();
 });
+
+it.each([true, false])(
+  "holds a dispatched completion for its delivery owner, which settles it (delivered %s)",
+  async (delivered) => {
+    const receipt = enqueueSystemEventReceipt(
+      "Exec completed (held0001, exit 0) :: HELD OUTPUT",
+      { sessionKey: "agent:research:global", contextKey: "exec:held0001" },
+      { allowDuplicate: true },
+    );
+    if (!receipt) {
+      throw new Error("Expected a durable system event receipt");
+    }
+    enqueueOwned("HELD OUTPUT", "exec:held0001", "held0001", receipt.eventId);
+    const leased = leasePendingExecSteeringItems({
+      requesterSessionKey,
+      ownerAgentId: "research",
+      leaseId,
+    });
+    if (!leased) {
+      throw new Error("Expected a leased exec completion");
+    }
+
+    const requests: Context["messages"][] = [];
+    recordProviderRequests(requests);
+    const { session } = await createTestSession();
+    const settlements: ExecSteeringDeliverySettlement[] = [];
+    const input = submissionInput(
+      { ...leased, leaseId },
+      prependExecSteeringPrompt({ steeringPrompt: leased.prompt, prompt: "Continue the work." }),
+    );
+    await submitEmbeddedAttemptPrompt({
+      ...input,
+      activeSession: session,
+      promptActiveSession: (prompt, options) => session.prompt(prompt, options),
+      onExecSteeringDispatched: (settlement) => {
+        settlements.push(settlement);
+      },
+    });
+
+    // The provider saw the completion, but the reply has not been delivered:
+    // the durable event stays and no other turn can lease the held copy.
+    expect(JSON.stringify(requests[0])).toContain("HELD OUTPUT");
+    expect(settlements).toHaveLength(1);
+    expect(peekSystemEventEntries("agent:research:global").map((event) => event.id)).toEqual([
+      receipt.eventId,
+    ]);
+    expect(
+      leasePendingExecSteeringItems({
+        requesterSessionKey,
+        ownerAgentId: "research",
+        leaseId: "concurrent",
+        now: Date.now() + 24 * 60 * 60 * 1000,
+      }),
+    ).toBeUndefined();
+
+    settlements[0]?.settle(delivered);
+
+    const next = leasePendingExecSteeringItems({
+      requesterSessionKey,
+      ownerAgentId: "research",
+      leaseId: "next-turn",
+    });
+    if (delivered) {
+      expect(peekSystemEventEntries("agent:research:global")).toEqual([]);
+      expect(next).toBeUndefined();
+    } else {
+      // A failed or suppressed reply returns both copies for recovery.
+      expect(peekSystemEventEntries("agent:research:global").map((event) => event.id)).toEqual([
+        receipt.eventId,
+      ]);
+      expect(next?.prompt).toContain("HELD OUTPUT");
+    }
+  },
+);
 
 it("refuses another agent's copy of a shared global key before provider I/O", async () => {
   enqueueOwned("RESEARCH SECRET OUTPUT", "exec:secret01", "secret01");

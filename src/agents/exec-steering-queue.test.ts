@@ -15,6 +15,7 @@ import {
   ensureExecSteeringConsumptionObserver,
   enqueueExecSteeringCompletion,
   hasPendingExecSteeringItems,
+  holdExecSteeringForDelivery,
   invalidateExecSteeringByDurableEventId,
   leasePendingExecSteeringItems,
   prependExecSteeringPrompt,
@@ -865,5 +866,90 @@ describe("exec-steering-queue", () => {
     // or blanket notification would wrongly retire the bound copy.
     expect(other.remove()).toBe(true);
     expect(hasPendingExecSteeringItems({ requesterSessionKey })).toBe(true);
+  });
+
+  describe("delivery settlement", () => {
+    const leaseId = "run-1:exec-steering";
+
+    function leaseShared(execId: string) {
+      const shared = enqueueSharedOccurrence({ execId });
+      const leased = leasePendingExecSteeringItems({ requesterSessionKey, leaseId, now: 1_000 });
+      if (!leased) {
+        throw new Error("expected a leased batch");
+      }
+      return { shared, leased };
+    }
+
+    it("holds a dispatched lease out of the stale re-lease sweep until delivery settles", () => {
+      const { shared, leased } = leaseShared("hold0001");
+      const settlement = holdExecSteeringForDelivery({ itemIds: leased.itemIds, leaseId });
+      expect(settlement).toBeDefined();
+
+      // Long past the stale window, an in-progress lease would be re-offered;
+      // a held one waits for its delivery owner.
+      expect(
+        leasePendingExecSteeringItems({
+          requesterSessionKey,
+          leaseId: "run-2:exec-steering",
+          now: 1_000 + 24 * 60 * 60 * 1000,
+        }),
+      ).toBeUndefined();
+      expect(peekSystemEventEntries(shared.queueKey).map((e) => e.id)).toEqual([
+        shared.durableEventId,
+      ]);
+    });
+
+    it("retires the copy and its durable event when the reply is delivered", () => {
+      const { shared, leased } = leaseShared("deliv001");
+      holdExecSteeringForDelivery({ itemIds: leased.itemIds, leaseId })?.settle(true);
+
+      expect(hasPendingExecSteeringItems({ requesterSessionKey })).toBe(false);
+      expect(peekSystemEventEntries(shared.queueKey)).toEqual([]);
+    });
+
+    it("returns the copy and keeps its durable event when the reply is not delivered", () => {
+      const { shared, leased } = leaseShared("fail0001");
+      holdExecSteeringForDelivery({ itemIds: leased.itemIds, leaseId })?.settle(false);
+
+      // The durable event survives for the idle heartbeat, and the next turn
+      // re-leases the same completion.
+      expect(peekSystemEventEntries(shared.queueKey).map((e) => e.id)).toEqual([
+        shared.durableEventId,
+      ]);
+      const next = leasePendingExecSteeringItems({
+        requesterSessionKey,
+        leaseId: "run-2:exec-steering",
+      });
+      expect(next?.itemIds).toEqual(leased.itemIds);
+      expect(next?.prompt).toContain("fail0001");
+    });
+
+    it("settles only once", () => {
+      const { shared, leased } = leaseShared("once0001");
+      const settlement = holdExecSteeringForDelivery({ itemIds: leased.itemIds, leaseId });
+      settlement?.settle(false);
+      const next = leasePendingExecSteeringItems({
+        requesterSessionKey,
+        leaseId: "run-2:exec-steering",
+      });
+      // A late "delivered" from the first turn cannot retire the re-leased copy.
+      settlement?.settle(true);
+      expect(next?.isCurrent()).toBe(true);
+      expect(peekSystemEventEntries(shared.queueKey)).toHaveLength(1);
+    });
+
+    it("returns no receipt when the occurrence was consumed elsewhere before the hold", () => {
+      const { shared, leased } = leaseShared("gone0001");
+      expect(shared.remove()).toBe(true);
+      expect(holdExecSteeringForDelivery({ itemIds: leased.itemIds, leaseId })).toBeUndefined();
+    });
+
+    it("drops a held copy whose durable event a heartbeat consumed while it waited", () => {
+      const { shared, leased } = leaseShared("hbeat001");
+      const settlement = holdExecSteeringForDelivery({ itemIds: leased.itemIds, leaseId });
+      expect(shared.remove()).toBe(true);
+      settlement?.settle(false);
+      expect(hasPendingExecSteeringItems({ requesterSessionKey })).toBe(false);
+    });
   });
 });
