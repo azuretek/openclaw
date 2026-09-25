@@ -4,7 +4,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
 import { withReplyDispatcher } from "../dispatch-dispatcher.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
-import { isExecSteeringReplySettled } from "./dispatch-from-config.finalize.js";
+import { isExecSteeringReplySettled } from "./dispatch-from-config.exec-steering.js";
 import {
   createHookCtx,
   emptyConfig,

@@ -1,5 +1,5 @@
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
-import { resolveReplyCompletion, type ReplyDeliveryState } from "../../agents/reply-completion.js";
+import { resolveReplyCompletion } from "../../agents/reply-completion.js";
 import { recordAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -14,6 +14,7 @@ import {
   type ReplyPayload,
 } from "../reply-payload.js";
 import { isDispatchReplyOperationAbortedError } from "./dispatch-from-config.abort.js";
+import { isExecSteeringReplySettled } from "./dispatch-from-config.exec-steering.js";
 import type { executeDispatch } from "./dispatch-from-config.execute.js";
 import {
   buildNoVisibleReplyFallbackText,
@@ -35,26 +36,6 @@ type ExecuteDispatchReadyState = Extract<
 export const needsTtsFallback = (clean: boolean, visible: string, fallback?: string) =>
   clean && !visible.trim() && Boolean(fallback?.trim());
 
-/**
- * Whether a turn that folded in steered exec completions settled its reply.
- * A delivered final retires them; a failed, cancelled, or suppressed final
- * returns them for recovery. A turn with no outbound reply content (a
- * deliberate silent reply) or message-tool-only delivery consumed them itself.
- */
-export function isExecSteeringReplySettled(params: {
-  replies: readonly ReplyPayload[] | undefined;
-  terminalDelivery: ReplyDeliveryState;
-  messageToolOnly: boolean;
-}): boolean {
-  if (!params.replies) {
-    return false;
-  }
-  if (params.terminalDelivery === "delivered" || params.messageToolOnly) {
-    return true;
-  }
-  return !params.replies.some((reply) => hasOutboundReplyContent(reply, { trimText: true }));
-}
-
 export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState) {
   const {
     cfg,
@@ -69,7 +50,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     markInboundDedupeReplayUnsafe,
     pendingContinuation,
     pendingContinuationSettlement,
-    pendingExecSteeringSettlements = [],
+    pendingExecSteeringSettlements,
     replyResult,
     replyRoute,
     routeReplyToOriginating,
