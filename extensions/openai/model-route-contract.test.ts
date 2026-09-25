@@ -27,28 +27,23 @@ describe("OpenAI model route contract", () => {
     ]);
   });
 
-  // #148559: gpt-5.4-nano has no static route contract. With nothing authored or
-  // observed it offers the Platform route and keeps the ChatGPT route an
-  // OAuth-only setup already used, under the usual subscription preference;
-  // every authored or observed route keeps the answer it had before, and the
-  // dual-route sibling is unaffected.
-  it("offers gpt-5.4-nano both routes under the subscription preference when nothing is authored or observed", () => {
-    expect(resolveUnconfiguredModel("gpt-5.4-nano")).toMatchObject({
+  // #148559: gpt-5.4-nano has no static route contract, and OpenAI serves it only
+  // on the Platform API. With nothing authored or observed it takes the Platform
+  // route alone; every authored or observed ChatGPT route keeps the answer it had
+  // before, and the dual-route sibling is unaffected.
+  it("routes gpt-5.4-nano to the Platform API alone when nothing is authored or observed", () => {
+    const result = resolveUnconfiguredModel("gpt-5.4-nano");
+    expect(result).toMatchObject({
       kind: "routes",
-      preferredAuthRequirement: "subscription",
       routes: [
         {
           api: "openai-responses",
           baseUrl: "https://api.openai.com/v1",
           authRequirement: "api-key",
         },
-        {
-          api: "openai-chatgpt-responses",
-          baseUrl: "https://chatgpt.com/backend-api/codex",
-          authRequirement: "subscription",
-        },
       ],
     });
+    expect(result.kind === "routes" ? result.routes : []).toHaveLength(1);
     expect(resolveUnconfiguredModel("gpt-5.4-mini")).toMatchObject({
       kind: "routes",
       routes: [
@@ -99,22 +94,19 @@ describe("OpenAI model route contract", () => {
   });
 
   // The openai manifest catalog lists nano on the Platform transport, so the
-  // runtime always observes a Platform row for it. That row must not strip the
-  // ChatGPT route an OAuth-only setup relies on.
-  it("keeps both gpt-5.4-nano routes when only a Platform row is observed", () => {
-    expect(
-      resolveModelRoutes({
-        provider: "openai",
-        modelId: "gpt-5.4-nano",
-        observedRoutes: [{ api: "openai-responses", baseUrl: "https://api.openai.com/v1" }],
-      }),
-    ).toMatchObject({
-      kind: "routes",
-      routes: [
-        { api: "openai-responses", authRequirement: "api-key" },
-        { api: "openai-chatgpt-responses", authRequirement: "subscription" },
-      ],
+  // runtime always observes a Platform row for it; that row resolves the same
+  // Platform route as the unobserved case.
+  it("keeps gpt-5.4-nano on the Platform route when only a Platform row is observed", () => {
+    const result = resolveModelRoutes({
+      provider: "openai",
+      modelId: "gpt-5.4-nano",
+      observedRoutes: [{ api: "openai-responses", baseUrl: "https://api.openai.com/v1" }],
     });
+    expect(result).toMatchObject({
+      kind: "routes",
+      routes: [{ api: "openai-responses", authRequirement: "api-key" }],
+    });
+    expect(result.kind === "routes" ? result.routes : []).toHaveLength(1);
   });
 
   it("preserves custom model spelling while matching built-in routes case-insensitively", () => {

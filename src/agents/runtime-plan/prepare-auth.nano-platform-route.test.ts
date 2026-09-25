@@ -71,43 +71,29 @@ function chatGPTOAuth() {
   };
 }
 
-// Before #148559 the offline ChatGPT catalog listed nano, so an unauthored setup
-// whose only credential is a ChatGPT login reached nano on the subscription route.
-// The Platform default must not take that route away.
-it("keeps an OAuth-only unauthored nano on the ChatGPT route", () => {
-  const plan = prepareAgentRuntimeAuthPlan({
-    ...codexNanoFixture(),
-    authProfileStore: authStore({ "openai:chatgpt": chatGPTOAuth() }),
-  });
-
-  expect(plan).toMatchObject({
-    forwardedAuthProfileId: "openai:chatgpt",
-    modelRoute: {
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api/codex",
-      authRequirement: "subscription",
-    },
-  });
+// OpenAI rejects nano on a ChatGPT account ("not supported when using Codex with a
+// ChatGPT account"), so an unauthored ChatGPT login is refused before any request
+// rather than sent to a route that can never answer.
+it("refuses an OAuth-only unauthored nano before any request", () => {
+  expect(() =>
+    prepareAgentRuntimeAuthPlan({
+      ...codexNanoFixture(),
+      authProfileStore: authStore({ "openai:chatgpt": chatGPTOAuth() }),
+    }),
+  ).toThrow("No route-compatible authentication source is configured for openai.");
 });
 
 // The runtime model for nano carries the manifest catalog's Platform row, so the
 // planner sees an observed Platform transport even with nothing authored.
-it("keeps an OAuth-only nano on the ChatGPT route when a Platform row is observed", () => {
-  const plan = prepareAgentRuntimeAuthPlan({
-    ...codexNanoFixture(),
-    modelApi: "openai-responses",
-    modelBaseUrl: "https://api.openai.com/v1",
-    authProfileStore: authStore({ "openai:chatgpt": chatGPTOAuth() }),
-  });
-
-  expect(plan).toMatchObject({
-    forwardedAuthProfileId: "openai:chatgpt",
-    modelRoute: {
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api/codex",
-      authRequirement: "subscription",
-    },
-  });
+it("refuses an OAuth-only nano when a Platform row is observed", () => {
+  expect(() =>
+    prepareAgentRuntimeAuthPlan({
+      ...codexNanoFixture(),
+      modelApi: "openai-responses",
+      modelBaseUrl: "https://api.openai.com/v1",
+      authProfileStore: authStore({ "openai:chatgpt": chatGPTOAuth() }),
+    }),
+  ).toThrow("No route-compatible authentication source is configured for openai.");
 });
 
 it("routes an API-key-only unauthored nano to the Platform API", () => {
@@ -124,9 +110,9 @@ it("routes an API-key-only unauthored nano to the Platform API", () => {
   });
 });
 
-// Automatic selection prefers the subscription route when both credentials are
-// eligible (docs/providers/openai/runtimes), so a mixed setup keeps its billing.
-it("keeps the subscription preference for nano when both credentials are available", () => {
+// The subscription preference applies only where both routes can serve the model;
+// nano has no ChatGPT route, so a mixed setup uses its API key.
+it("uses the API key for nano when both credentials are available", () => {
   const plan = prepareAgentRuntimeAuthPlan({
     ...codexNanoFixture(),
     authProfileStore: authStore({
@@ -136,11 +122,11 @@ it("keeps the subscription preference for nano when both credentials are availab
   });
 
   expect(plan).toMatchObject({
-    forwardedAuthProfileId: "openai:chatgpt",
+    forwardedAuthProfileId: "openai:platform",
     modelRoute: {
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api/codex",
-      authRequirement: "subscription",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      authRequirement: "api-key",
     },
   });
 });
