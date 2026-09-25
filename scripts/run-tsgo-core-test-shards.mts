@@ -2,7 +2,7 @@
 
 // Run bounded test graphs in fresh processes so one shard's checker heap cannot
 // accumulate while the next shard loads.
-import fs from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 import type { CoreTsgoGraph } from "./check-tsgo-core-boundary.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
@@ -18,6 +18,9 @@ import {
   selectTsgoCoreTestShards,
   selectChangedTsgoCoreTestShards,
   needsTypedRuntimeDistPreparation,
+  selectChangedCiTsgoGraphs,
+  resolveCiTsgoGraphs,
+  TSGO_CI_GRAPHS,
   TSGO_CORE_TEST_SHARDS,
   selectTsgoCoreTestStripe,
 } from "./lib/tsgo-core-test-shards.mts";
@@ -31,7 +34,15 @@ function runShard(config: string, env: NodeJS.ProcessEnv): Promise<number> {
       path.join(repoRoot, "scripts/run-tsgo.mts"),
       // These graphs have no project references. Project mode rechecks root
       // membership even when a restored build-info file is newer than a new root.
-      ["-p", config, "--incremental"],
+      [
+        "-p",
+        config,
+        "--incremental",
+        // The package command pins this config's cache at the repository root.
+        ...(config === "test/tsconfig/tsconfig.test.root.json"
+          ? ["--tsBuildInfoFile", ".artifacts/tsgo-cache/test-root.tsbuildinfo"]
+          : []),
+      ],
       { native: true },
     ),
     cwd: repoRoot,
@@ -55,7 +66,7 @@ async function runTsgoCoreTestShards(
     // Gate on the file existing: synthetic fixtures select the full shard list
     // without carrying the real test, and must not start a build they cannot run.
     if (
-      needsTypedRuntimeDistPreparation(shards, (file) => fs.existsSync(path.join(repoRoot, file)))
+      needsTypedRuntimeDistPreparation(shards, (file) => existsSync(path.join(repoRoot, file)))
     ) {
       const buildCode = await buildTsgoCoreTestTypedRuntimeDist(env, repoRoot);
       if (buildCode !== 0) {
@@ -135,6 +146,20 @@ export function createChangedCoreTestCheck(
   };
 }
 
+/** Preflight selects compiler consumers once; executing rows retain their existing owners. */
+export async function createChangedCiTypeCheckPlan(
+  paths: readonly string[],
+  options: { cwd?: string } = {},
+) {
+  const cwd = realpathSync(options.cwd ?? repoRoot);
+  const { inspectCiTsgoCheckGraphs } = await import("./check-tsgo-core-boundary.mts");
+  const inspected = await inspectCiTsgoCheckGraphs({ cwd });
+  const selected = paths.every((file) => existsSync(path.resolve(cwd, file)))
+    ? selectChangedCiTsgoGraphs(paths, inspected)
+    : undefined;
+  return { mode: selected ? "changed" : "full", graphs: selected ?? TSGO_CI_GRAPHS };
+}
+
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   // Each graph is a serial single-project build, so tsgo gains little past four
   // cores; CI stripe jobs opt into overlapping fresh child processes to use the
@@ -162,8 +187,15 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
     }
   }
 
+  const ciGraphsIndex = process.argv.indexOf("--ci-graphs-json");
   const changedPathsIndex = process.argv.indexOf("--changed-paths-json");
-  if (changedPathsIndex >= 0) {
+  if (ciGraphsIndex >= 0) {
+    const names: unknown = JSON.parse(process.argv[ciGraphsIndex + 1] ?? "null");
+    if (!Array.isArray(names) || !names.every((name) => typeof name === "string")) {
+      throw new Error("--ci-graphs-json requires a JSON string array");
+    }
+    process.exitCode = await runTsgoCoreTestShards(resolveCiTsgoGraphs(names), { concurrency });
+  } else if (changedPathsIndex >= 0) {
     const paths: unknown = JSON.parse(process.argv[changedPathsIndex + 1] ?? "null");
     if (
       !Array.isArray(paths) ||
