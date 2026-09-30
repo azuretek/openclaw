@@ -247,10 +247,13 @@ parallel, builds and qualifies their final package bytes, and seals a readiness
 receipt only after every package can be downloaded and verified. Preparation
 does not publish packages or change public selectors.
 
-Every ClawHub package must already have the normal trusted-publisher binding.
-Preparation refuses to issue a readiness receipt for packages needing bootstrap
-or publisher repair; use the existing ClawHub owner workflow to finish that setup
-first. The button rechecks this prerequisite before starting any plugin writer.
+ClawHub packages needing publication or adoption must have the normal
+trusted-publisher binding. Use the existing ClawHub owner workflow to finish
+bootstrap or publisher repair first; the button rechecks this prerequisite before
+starting a plugin writer. Pending and failed publications stay out of writer and
+repair rosters, including staged package shells hidden by public metadata. Their
+publication state and operator recovery instructions remain visible in the release
+plan summary; final public verification still requires published downloads.
 
 When preparation succeeds, copy its summary's `prepared_artifact` JSON into
 **OpenClaw Release Button**, selecting the same protected tooling tag. This is
@@ -326,7 +329,10 @@ prove availability. The parent's
 `Complete publish workflows` step polls the registry document for the version
 under the target dist-tag (bounded 10 minutes), then dispatches the
 `sync_beta_to_stable` ledger sync through a release-ledger app token and waits
-for it before verification; if its summary reports the token unavailable,
+up to 50 minutes (`RELEASE_NPM_DIST_TAG_SYNC_TIMEOUT_SECONDS`) before verification.
+Status changes and five-minute heartbeats identify the run. A still-running sync
+fails explicitly without judging the beta floor; inspect that run before resuming.
+If its summary reports the token unavailable,
 dispatch the sync by hand before the verify runs. For manual work, poll the
 registry yourself before the sync or verification. Run postpublish
 verification from a checkout of the Release SHA (a newer tooling checkout
