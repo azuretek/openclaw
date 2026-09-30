@@ -94,7 +94,7 @@ function providerConfig(baseUrl: string, modelId: string) {
   return {
     api: "openai-responses" as const,
     auth: "api-key" as const,
-    apiKey: "***",
+    apiKey: "fixture-key",
     baseUrl,
     models: [
       {
