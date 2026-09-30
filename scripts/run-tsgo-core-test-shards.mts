@@ -80,9 +80,7 @@ async function runTsgoCoreTestShards(
     // build the typed runtime dist entries first or those imports report TS2307.
     // Gate on the file existing: synthetic fixtures select the full shard list
     // without carrying the real test, and must not start a build they cannot run.
-    if (
-      needsTypedRuntimeDistPreparation(shards, (file) => existsSync(path.join(repoRoot, file)))
-    ) {
+    if (needsTypedRuntimeDistPreparation(shards, (file) => existsSync(path.join(repoRoot, file)))) {
       const buildCode = await buildTsgoCoreTestTypedRuntimeDist(env, repoRoot);
       if (buildCode !== 0) {
         return buildCode;
