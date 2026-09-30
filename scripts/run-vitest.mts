@@ -756,7 +756,10 @@ export function installVitestNoOutputWatchdog(params: {
   // preparation. The compile between them owns the preparation deadline so a cold
   // build cannot be reported as a stalled test run (#162136).
   const beginPreparation = () => {
-    if (!active || preparing) {
+    // Mirrors output activity's post-timeout guard: a preparation that is only
+    // admitted after the silence deadline already fired must not clear the
+    // pending force-kill fallback for a child that ignored SIGTERM.
+    if (!active || timedOut || preparing) {
       return;
     }
     preparing = true;
@@ -770,7 +773,7 @@ export function installVitestNoOutputWatchdog(params: {
   };
 
   const endPreparation = () => {
-    if (!active || !preparing) {
+    if (!active || timedOut || !preparing) {
       return;
     }
     preparing = false;

@@ -1652,6 +1652,46 @@ registerHooks({resolve(specifier, context, nextResolve) {
     }
   });
 
+  it("keeps the force-kill fallback when a preparation is admitted after the deadline fired", () => {
+    vi.useFakeTimers();
+    try {
+      const stdout = new EventEmitter();
+      const timeoutSpy = vi.fn();
+      const forceKillSpy = vi.fn();
+      const logSpy = vi.fn();
+
+      const watchdog = installVitestNoOutputWatchdog({
+        streams: [stdout],
+        timeoutMs: 60_000,
+        preparationTimeoutMs: 300_000,
+        forceKillAfterMs: 5_000,
+        log: logSpy,
+        onTimeout: timeoutSpy,
+        onForceKill: forceKillSpy,
+        setTimeoutFn: setTimeout,
+        clearTimeoutFn: clearTimeout,
+      });
+
+      // The scoped deadline fires while the worker stays silent, so the watchdog
+      // signals SIGTERM and arms the force-kill fallback.
+      vi.advanceTimersByTime(60_000);
+      expect(timeoutSpy).toHaveBeenCalledTimes(1);
+
+      // A worker that admits its preparation only now must not cancel that
+      // fallback: the stalled child may still be ignoring SIGTERM.
+      watchdog.beginPreparation();
+      vi.advanceTimersByTime(5_000);
+      expect(forceKillSpy).toHaveBeenCalledTimes(1);
+      expect(logSpy).toHaveBeenCalledWith(
+        "[vitest] process group still alive after 5000ms; sending SIGKILL.",
+      );
+
+      watchdog.teardown();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("parses the optional watchdog preparation window", () => {
     expect(resolveVitestPreparationTimeoutMs({})).toBeNull();
     expect(
