@@ -328,13 +328,24 @@ describe("subagent orphan recovery — faithful restart path", () => {
           }
           if (source === "retired wait retry") {
             vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-            oldWait.reject(new Error("gateway request timeout"));
             // The retry timer is scheduled only after the rejected wait's recovery
-            // path settles its Gateway worker reads, so a single 0ms advance can
-            // inspect the timer queue before the retry exists on a loaded shard.
-            // Drain that path until the retry timer is present.
-            for (let drain = 0; drain < 200 && vi.getTimerCount() === 0; drain += 1) {
-              await vi.advanceTimersByTimeAsync(0);
+            // path has settled its asynchronous worker session reads. Wait on that
+            // scheduling signal instead of counting zero-time advances, which a
+            // loaded shard can exhaust before the reads finish.
+            const retryScheduled = createDeferred();
+            const fakeSetTimeout = globalThis.setTimeout;
+            const setTimeoutSpy = vi
+              .spyOn(globalThis, "setTimeout")
+              .mockImplementation((...args: Parameters<typeof setTimeout>) => {
+                const timer = fakeSetTimeout(...args);
+                retryScheduled.resolve();
+                return timer;
+              });
+            try {
+              oldWait.reject(new Error("gateway request timeout"));
+              await retryScheduled.promise;
+            } finally {
+              setTimeoutSpy.mockRestore();
             }
             expect(vi.getTimerCount()).toBeGreaterThan(0);
             rotateAgentEventLifecycleGeneration();
