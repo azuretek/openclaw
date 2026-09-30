@@ -1,7 +1,3 @@
-/**
- * Builds the prompt after session preparation and before provider submission.
- * It may assume session, hook, cache, and context-engine inputs are ready.
- */
 import { ensureSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { filterHeartbeatTranscriptArtifacts } from "../../../auto-reply/heartbeat-filter.js";
@@ -17,6 +13,7 @@ import {
 } from "../../../infra/heartbeat-summary.js";
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { buildInterSessionPromptContext } from "../../../sessions/input-provenance.js";
+import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import {
@@ -72,16 +69,11 @@ import {
   buildCurrentInboundPrompt,
   buildRuntimeContextCustomMessage,
   resolveRuntimeContextPromptParts,
-  type RuntimeContextCustomMessage,
 } from "./runtime-context-prompt.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
-/**
- * Assembles hook, orphan-repair, steering, and cache inputs for one prompt.
- */
 type HookRunner = ReturnType<typeof getGlobalHookRunner>;
 type OrphanRepairPlan = ReturnType<typeof resolveOrphanRepairPlan>;
-type PromptBuildHookContext = Parameters<typeof resolvePromptBuildHookResult>[0]["hookCtx"];
 
 type EmbeddedAttemptSteeringLease = {
   leaseId: string;
@@ -174,7 +166,6 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
         messages: promptBuildMessages,
         hookCtx,
         hookRunner: input.hookRunner,
-        bootstrapContextRunKind: attempt.bootstrapContextRunKind,
       });
   const callableToolNames = input.applyPromptBuildToolsAllow(hookResult?.toolsAllow);
   // Regenerate owned capability guidance before composing hook additions, without
@@ -273,12 +264,10 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   if (leafEntry && input.orphanRepair) {
     const orphanPromptMerge = mergeOrphanedTrailingUserPrompt({
       prompt: effectivePrompt,
-      trigger: attempt.trigger,
       leafMessage: leafEntry.message,
     });
     const transcriptPromptMerge = mergeOrphanedTrailingUserPrompt({
       prompt: effectiveTranscriptPrompt,
-      trigger: attempt.trigger,
       leafMessage: leafEntry.message,
     });
     effectivePrompt = orphanPromptMerge.prompt;
@@ -410,9 +399,6 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   };
 }
 
-/**
- * Compiles current-turn prompt text, hidden runtime context, and hook messages.
- */
 type PromptContextAttempt = Pick<
   EmbeddedRunAttemptParams,
   | "config"
@@ -434,29 +420,6 @@ type PromptAssemblyContext = {
   heartbeatSummary?: Pick<HeartbeatSummary, "ackMaxChars" | "prompt">;
 };
 
-type CurrentUserTimestampOverride = {
-  timestamp: number;
-  text: string;
-  alternateText?: string;
-};
-
-type EmbeddedAttemptPromptContext = {
-  aggregatePressureEngaged: boolean;
-  contextTokenBudget: number;
-  currentUserTimestampOverride?: CurrentUserTimestampOverride;
-  effectivePrompt: string;
-  hookMessagesForCurrentPrompt: AgentMessage[];
-  llmBoundaryPromptForPrecheck: string;
-  prePromptMessageCount: number;
-  promptForModel: string;
-  promptForSession: string;
-  promptSubmission: ReturnType<typeof resolveRuntimeContextPromptParts>;
-  promptToolResultAggregateMaxChars: number;
-  promptToolResultMaxChars: number;
-  runtimeContextMessageForCurrentTurn?: RuntimeContextCustomMessage;
-  systemPromptForHook: string;
-};
-
 export async function prepareEmbeddedAttemptPromptContext(input: {
   sessionVersion?: number;
   appendOnlyRuntimeContext?: boolean;
@@ -473,7 +436,7 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
   systemPromptReport?: SessionSystemPromptReport;
   systemPromptText: string;
   toolResultPromptProjectionState: ToolResultPromptProjectionState;
-}): Promise<EmbeddedAttemptPromptContext> {
+}) {
   const { attempt } = input;
   const preparedUserTurnTimestamp = (
     input.preparedUserTurnMessage as { timestamp?: unknown } | undefined
@@ -592,11 +555,9 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
   const contextFragments = promptSubmission.runtimeOnly
     ? [...eventFragments, ...runtimeFacts]
     : [...fragments, ...runtimeFacts];
-  const runtimeContextForHook =
-    contextFragments
-      .map((fragment) => fragment.text)
-      .filter(Boolean)
-      .join("\n\n") || undefined;
+  const runtimeContextForHook = joinPresentTextSegments(
+    contextFragments.map((fragment) => fragment.text),
+  );
   const runtimeContextMessageForCurrentTurn = buildRuntimeContextCustomMessage(
     runtimeContextForHook,
     contextFragments,

@@ -34,13 +34,17 @@ import {
 } from "./agent-dir-registry.js";
 import { overlayExternalAuthProfiles } from "./auth-profiles/external-auth-runtime.js";
 import { listExternalCliSyncProviderIds } from "./auth-profiles/external-cli-sync.js";
+import { resolveAuthStorePathForDisplay } from "./auth-profiles/paths.js";
 import { mergeRuntimeExternalProfileReferences } from "./auth-profiles/runtime-external-profile-references.js";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "./auth-profiles/store-runtime.js";
 import { preserveResolvedSecretBackedCredentials } from "./auth-profiles/store.js";
 import { prepareModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
+import { modelCatalogRouteVariantKey, modelCatalogRowToEntry } from "./model-catalog-entry.js";
+import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import { resolveImplicitProviderDiscoveryScope } from "./models-config.providers.discovery-scope.js";
 import { prepareImplicitProviderStaticCatalog } from "./models-config.providers.implicit.js";
+import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 import {
   PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS,
   fingerprintPreparedModelCatalogGeneration,
@@ -325,7 +329,13 @@ async function runCatalogRequest(
       env: value.input.env,
       workspaceDir: value.input.workspaceDir,
       pluginMetadataSnapshot,
-      providerDiscoveryProviderIds: exactAgentFacts.providerIds,
+      providerDiscoveryProviderIds: [
+        ...new Set([
+          ...value.providerIds,
+          ...Object.keys(credentials),
+          ...exactAgentFacts.providerIds,
+        ]),
+      ],
     });
     const discoveryPluginIds = [...(discoveryScope?.keys() ?? [])];
     const discoveryPlan = await withPluginRuntimeGenerationScope(pluginGenerationScope, () =>
@@ -378,7 +388,11 @@ async function runCatalogRequest(
       staticOwner.staticProviderIds = staticProviderIds;
     }
     catalogGeneration = staticOwner.pluginGeneration;
-    const { value: source, providerExpiries } = await captureProviderCatalogExpiries(() =>
+    const {
+      value: source,
+      providerExpiries,
+      providerModels,
+    } = await captureProviderCatalogExpiries(() =>
       prepareAgentCatalogSource(exactAgentFacts, catalogGeneration, "live", false, {
         authStore,
         providerDiscoveryProviderIds: request.providerIds,
@@ -414,6 +428,32 @@ async function runCatalogRequest(
     const catalogModels = withPluginRuntimeGenerationScope(pluginGenerationScope, () =>
       facts.templateModelRegistry.getAll(),
     );
+    const hookRows = withPluginRuntimeGenerationScope(pluginGenerationScope, () => {
+      const normalizeProvider = createPreparedModelCatalogProviderNormalizer(
+        pluginMetadataSnapshot,
+        value.input.config,
+        value.input.env,
+      );
+      const keyOf = createModelCatalogIdentityKeyResolver();
+      const accepted = new Set(
+        [...providerModels].flatMap(([provider, ids]) =>
+          [...ids].map((id) => keyOf({ provider: normalizeProvider(provider), id })),
+        ),
+      );
+      const rows = new Map<string, Set<string>>();
+      // Registry rows carry accepted route/config overlays; augmentation happens later.
+      for (const model of catalogModels) {
+        const provider = normalizeProvider(model.provider);
+        const key = keyOf({ provider, id: model.id });
+        if (!accepted.has(key)) {
+          continue;
+        }
+        const keys = rows.get(provider) ?? new Set<string>();
+        keys.add(modelCatalogRouteVariantKey(modelCatalogRowToEntry(model), key));
+        rows.set(provider, keys);
+      }
+      return rows;
+    });
     for (const model of catalogModels) {
       const provider = normalizeProviderId(model.provider);
       const models = runtimeModels.get(provider) ?? [];
@@ -426,6 +466,15 @@ async function runCatalogRequest(
         runtimeModels.set(provider, []);
       }
     }
+    const authLabelProviders = [
+      ...exactAgentFacts.providerIds,
+      ...Object.keys(catalogCredentials),
+      ...Object.keys(value.input.config.models?.providers ?? {}),
+      ...facts.modelCatalog.entries.map((entry) => entry.provider),
+      ...facts.modelCatalog.routeVariants.map((entry) => entry.provider),
+      ...(facts.modelCatalog.staticEntries ?? []).map((entry) => entry.provider),
+      ...Object.values(authStore.profiles).map((profile) => profile.provider),
+    ];
     const result: PreparedModelWorkerResult = {
       status: "ok",
       kind: "catalog",
@@ -433,26 +482,23 @@ async function runCatalogRequest(
       snapshot: facts.modelCatalog,
       runtimeModels,
       providerExpiries,
+      hookRows,
       configuredRuntimeModels: facts.configuredRuntimeModels,
       credentials: catalogCredentials,
-      providerAuthLabels: withPluginRuntimeGenerationScope(pluginGenerationScope, () =>
-        prepareModelCatalogAuthLabels({
-          config: value.input.config,
-          agentDir: value.input.agentDir,
-          workspaceDir: value.input.workspaceDir,
-          env: value.input.env,
-          store: authStore,
-          providers: [
-            ...exactAgentFacts.providerIds,
-            ...Object.keys(catalogCredentials),
-            ...Object.keys(value.input.config.models?.providers ?? {}),
-            ...facts.modelCatalog.entries.map((entry) => entry.provider),
-            ...facts.modelCatalog.routeVariants.map((entry) => entry.provider),
-            ...(facts.modelCatalog.staticEntries ?? []).map((entry) => entry.provider),
-            ...Object.values(authStore.profiles).map((profile) => profile.provider),
-          ],
-        }),
-      ),
+      providerAuthLabels:
+        authLabelProviders.length === 0
+          ? new Map()
+          : withPluginRuntimeGenerationScope(pluginGenerationScope, () =>
+              prepareModelCatalogAuthLabels({
+                config: value.input.config,
+                agentDir: value.input.agentDir,
+                authStorePath: resolveAuthStorePathForDisplay(value.input.agentDir),
+                workspaceDir: value.input.workspaceDir,
+                env: value.input.env,
+                store: authStore,
+                providers: authLabelProviders,
+              }),
+            ),
       authStore,
       authModes: resolveUsableAgentCredentialModes(catalogCredentials),
     };
@@ -512,8 +558,12 @@ function isWorkerRequest(value: unknown): value is PreparedModelWorkerRequest {
 
 if (parentPort) {
   const data = workerData as PreparedModelCatalogWorkerData;
-  // Agent/auth requests share registrations only when the complete plugin context matches.
-  let current: { fingerprint: string; prepared: WorkerGeneration } | undefined;
+  // Evicting another workspace recaptures native ESM graphs that Node cannot unload.
+  // Keep each workspace's current context within this inventory-owned worker lifetime.
+  const contexts = new Map<
+    string | undefined,
+    { fingerprint: string; prepared: WorkerGeneration }
+  >();
   serveWorkerTasks(async (input) => {
     // SAFETY: The typed catalog host is the sole producer of this private task envelope.
     const { value, request } = input as PreparedModelCatalogWorkerTask;
@@ -523,7 +573,8 @@ if (parentPort) {
     return withPluginSourceCaptureDirectory(
       data.sourceCaptureDirectory,
       async () => {
-        let previous = current;
+        const workspaceDir = value.pluginMetadataSnapshot.workspaceDir ?? value.input.workspaceDir;
+        let previous = contexts.get(workspaceDir);
         const fingerprint = fingerprintPreparedModelCatalogPluginContext(value);
         let attempted: WorkerGeneration | undefined;
         try {
@@ -541,7 +592,7 @@ if (parentPort) {
               ),
           );
           if (attempted && result.status === "ok") {
-            current = { fingerprint, prepared: attempted };
+            contexts.set(workspaceDir, { fingerprint, prepared: attempted });
             attempted = undefined;
             // Acquire the replacement before releasing shared source registrations.
             await previous?.prepared.release();

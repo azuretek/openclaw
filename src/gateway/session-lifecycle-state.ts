@@ -7,10 +7,7 @@ import {
   classifyAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
-import {
-  isMainSessionRecoveryLifecycleEvent,
-  projectMainSessionRecoveryLifecycle,
-} from "../agents/main-session-recovery/main-session-recovery-lifecycle.js";
+import { projectMainSessionRecoveryLifecycle } from "../agents/main-session-recovery/main-session-recovery-lifecycle.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 import { buildUpdatedSessionGoalStatus } from "../config/sessions/goals-transitions.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -74,15 +71,7 @@ type LifecycleSessionShape = Pick<
 
 type PersistedLifecycleSessionShape = Pick<
   SessionEntry,
-  | "updatedAt"
-  | "status"
-  | "lastRunError"
-  | "lastRunId"
-  | "startedAt"
-  | "endedAt"
-  | "runtimeMs"
-  | "lastActivityAt"
-  | "abortedLastRun"
+  | keyof LifecycleSessionShape
   | "restartRecoveryRuns"
   | "restartRecoveryForceSafeTools"
   | "mainRestartRecovery"
@@ -301,13 +290,6 @@ export function deriveGatewaySessionLifecycleProjectionPatch(params: {
   return Object.hasOwn(patch, "status")
     ? { ...fields, status: status === "interrupted" ? "failed" : status }
     : fields;
-}
-
-export function isRestartRecoveryLifecycleEvent(params: {
-  entry?: Pick<SessionEntry, "restartRecoveryRuns"> | null;
-  event: Pick<LifecycleEventLike, "runId" | "lifecycleGeneration" | "data">;
-}): boolean {
-  return isMainSessionRecoveryLifecycleEvent(params);
 }
 
 /**
@@ -546,6 +528,8 @@ export async function persistGatewaySessionLifecycleEvent(params: {
           sessionKey: sessionEntry.canonicalKey,
           agentId: sessionEntry.agentId,
           storePath: sessionEntry.storePath,
+          // The SQLite writer already published sharing facts; this adapter only projects run state.
+          facts: { kind: "unchanged" },
         }),
       ...(params.assertCommitAllowed || providerReview
         ? {

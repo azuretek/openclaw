@@ -9,6 +9,7 @@ import type { CompactionRequestBudget } from "../../sessions/compaction/request-
 import type { SystemAgentToolOptions } from "../../tools/system-agent-tool.js";
 import type { DeferredEmbeddedRunLifecycleOwner } from "./deferred-lifecycle-owner.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
+import type { EmbeddedRunCompletionCheck } from "./terminal-retry-state.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 export type CompactionAccountingTarget = Readonly<
@@ -84,6 +85,8 @@ export type EmbeddedRunAttemptInternalParams = EmbeddedRunAttemptParams &
     "onContextAccountingEvent" | "onCompactionRequestBudget" | "onPendingExecSteering"
   > & {
     compactionCountOwner?: "subscription" | "caller";
+    /** Current-run committed plan facts; retained across attempts, never loaded from history. */
+    completionCheck?: EmbeddedRunCompletionCheck;
   };
 
 export type RunEmbeddedAgentParamsWithSessionFile = RunEmbeddedAgentInternalParams & {

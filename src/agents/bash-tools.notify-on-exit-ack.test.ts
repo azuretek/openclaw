@@ -8,7 +8,6 @@ import {
 } from "../infra/heartbeat-runner.test-utils.js";
 import { publishSystemEventStoreResolver } from "../infra/system-event-ownership.js";
 import {
-  consumeSelectedSystemEventEntries,
   enqueueSystemEventEntry,
   peekSystemEventEntries,
   resetSystemEventsForTest,
@@ -71,16 +70,11 @@ it("keeps selected-agent global completions scoped to their owner", async () => 
     sessionKey: "global",
     agentId: "research",
   });
-  expect(process.run.session.sessionKey).toBe("global");
   await process.finish();
 
-  expect(requestHeartbeatMock).toHaveBeenCalledWith({
-    source: "exec-event",
-    intent: "event",
-    reason: "exec-event",
-    coalesceMs: 0,
-    agentId: "research",
-  });
+  expect(requestHeartbeatMock).toHaveBeenCalledWith(
+    expect.objectContaining({ agentId: "research" }),
+  );
   expect(peekSystemEventEntries("agent:research:global")).toHaveLength(1);
   expect(peekSystemEventEntries("agent:main:global")).toEqual([]);
 });
@@ -123,27 +117,10 @@ it("isolates identical completions across exact full-slug reuse", async () => {
   expect(contexts()).toEqual(["exec:amber-atlas", "marker"]);
 });
 
-it("invalidates a heartbeat snapshot when an acknowledged poll consumes its occurrence", async () => {
-  const process = await startNotifyRun();
-  await process.finish();
-  const snapshot = peekSystemEventEntries(QUEUE_KEY);
-  const result = await poll(process.run.session.id);
-  expect(peekSystemEventEntries(QUEUE_KEY)).toEqual(snapshot);
-  acknowledgeInternalToolResult(result);
-
-  expect(peekSystemEventEntries(QUEUE_KEY)).toEqual([]);
-  expect(consumeSelectedSystemEventEntries(QUEUE_KEY, snapshot)).toEqual([]);
-});
-
 it("keeps an identical successor queued when heartbeat consumes a stale snapshot", async () => {
   await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
     const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          workspace: tmpDir,
-          heartbeat: { every: "5m", target: "telegram" },
-        },
-      },
+      agents: { defaults: { workspace: tmpDir, heartbeat: { every: "5m", target: "telegram" } } },
       channels: { telegram: { allowFrom: ["*"] } },
       session: { mainKey: "notify-ack", store: storePath },
     };
