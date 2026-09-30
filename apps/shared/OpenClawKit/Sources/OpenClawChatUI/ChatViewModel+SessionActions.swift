@@ -74,6 +74,25 @@ extension OpenClawChatViewModel {
         let generation: UInt64
     }
 
+    func beginSessionBranchSwitchActivity(for session: SessionSnapshot) -> SessionBranchSwitchActivity {
+        self.nextSessionBranchSwitchGeneration &+= 1
+        let activity = SessionBranchSwitchActivity(
+            session: session,
+            generation: self.nextSessionBranchSwitchGeneration)
+        self.sessionBranchSwitchActivity = activity
+        return activity
+    }
+
+    func isCurrentSessionBranchSwitchActivity(_ activity: SessionBranchSwitchActivity) -> Bool {
+        self.sessionBranchSwitchActivity == activity && self.isCurrentSession(activity.session)
+    }
+
+    func endSessionBranchSwitchActivity(_ activity: SessionBranchSwitchActivity) {
+        guard self.isCurrentSessionBranchSwitchActivity(activity) else { return }
+        self.sessionBranchSwitchActivity = nil
+        self.flushOutboxIfNeeded()
+    }
+
     var isSwitchingSessionBranch: Bool {
         self.sessionBranchSwitchActivity != nil
     }
@@ -546,6 +565,7 @@ extension OpenClawChatViewModel {
             }
             self.switchSession(to: createdKey)
         } catch {
+            guard self.isCurrentSession(initiatingSession) else { return }
             self.errorText = error.localizedDescription
             chatSessionActionsLogger.error(
                 "sessions.create(fork) failed \(error.localizedDescription, privacy: .public)")
@@ -588,6 +608,7 @@ extension OpenClawChatViewModel {
             await self.refreshSessionBranches(confirmingBranchChange: true)
         } catch {
             await self.cancelOutboxSessionMutation(initiatingSession)
+            guard self.isCurrentSession(initiatingSession) else { return }
             self.errorText = error.localizedDescription
             chatSessionActionsLogger.error(
                 "sessions.rewind failed \(error.localizedDescription, privacy: .public)")
@@ -824,6 +845,7 @@ extension OpenClawChatViewModel {
             self.restoreEditorAttachments(result.editorAttachments)
         } catch {
             await self.cancelOutboxSessionMutation(initiatingSession)
+            guard self.isCurrentSession(initiatingSession) else { return }
             self.errorText = error.localizedDescription
             chatSessionActionsLogger.error(
                 "sessions.fork failed \(error.localizedDescription, privacy: .public)")

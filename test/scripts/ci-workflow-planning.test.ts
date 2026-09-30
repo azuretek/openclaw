@@ -1121,7 +1121,7 @@ describe("release fast lane", () => {
     expect(result.outputs.release_fast_lane).toBe("true");
     expect(result.outputs.run_docker_seed_e2e).toBe("true");
     expect(result.outputs.docker_seed_lanes).toBe(
-      "published-upgrade-survivor mcp-channels cron-mcp-cleanup mcp-code-mode-gateway",
+      "mcp-channels cron-mcp-cleanup mcp-code-mode-gateway",
     );
     expect(result.outputs.run_qa_smoke_ci).toBe("true");
     expect(result.outputs.run_check).toBe("true");
@@ -1254,6 +1254,7 @@ describe("ci workflow guards", () => {
       },
       {
         path: "extensions/telegram/src/send.ts",
+        boundaryOwner: "additional-checks",
         tasks: ["guards", "prod-types", "lint", "dependencies", "test-types"],
         fastTasks: [],
         baselineRatchets: true,
@@ -1295,6 +1296,7 @@ describe("ci workflow guards", () => {
         lintExtensionStripes,
         lintCentralScripts,
         graphs,
+        boundaryOwner,
         nodeDataOnly = false,
       }) => {
         const paths = [changedPath];
@@ -1422,7 +1424,7 @@ describe("ci workflow guards", () => {
         );
         expect(
           evaluateWorkflowExpression(boundaryStep.env.TYPE_GRAPH_BOUNDARY_OWNER, context),
-        ).toBe(tasks.includes("test-types") ? "check-plan" : "");
+        ).toBe(boundaryOwner ?? (tasks.includes("test-types") ? "check-plan" : ""));
         expect(
           evaluateWorkflowExpression(
             workflow.jobs["check-test-types-hosted-core-shard"].if,
@@ -1505,6 +1507,16 @@ describe("ci workflow guards", () => {
     it.each([
       { paths: ["src/config/settings.json"], owner: "check-plan", boundaryRow: false },
       {
+        paths: ["extensions/telegram/src/send.ts"],
+        owner: "additional-checks",
+        boundaryRow: true,
+      },
+      {
+        paths: ["extensions/telegram/src/send.ts", "docs/plugins/example.md", "ui/styles/chat.css"],
+        owner: "additional-checks",
+        boundaryRow: true,
+      },
+      {
         paths: ["src/shared/runtime.ts", "src/config/settings.json"],
         owner: "additional-checks",
         boundaryRow: true,
@@ -1518,10 +1530,20 @@ describe("ci workflow guards", () => {
           eventName: "pull_request",
           runnerProfile: "hybrid",
           changedPaths: paths,
+          ciTypeGraphNames: paths[0]?.startsWith("extensions/")
+            ? ["extensions", "extensions-test", "test-root"]
+            : undefined,
           changedPlannerSource: changedPlannerSource(),
         });
         expect(manifest.status, manifest.output).toBe(0);
         expect(manifest.outputs.type_graph_boundary_owner).toBe(owner);
+        if (paths[0]?.startsWith("extensions/")) {
+          expect(JSON.parse(manifest.checkPlanOutputs.core_type_matrix!).include).toEqual([]);
+        }
+        expect(
+          JSON.parse(expectDefined(manifest.outputs.check_plan_input_json, "check plan input"))
+            .typeGraphBoundaryOwner,
+        ).toBe(owner);
         const rows = JSON.parse(
           expectDefined(manifest.outputs.check_additional_matrix, "additional matrix"),
         ).include;
@@ -2402,8 +2424,8 @@ describe("ci workflow guards", () => {
             ].includes(name),
         );
       }
-      const packageStep = workflow.jobs["docker-seed-e2e"].steps.find(
-        (step: WorkflowStep) => step.name === "Prepare main Docker smoke package",
+      const packageStep = workflow.jobs["docker-seed-e2e"].steps.find((step: WorkflowStep) =>
+        step.run?.includes("scripts/package-openclaw-for-docker.mjs"),
       );
       expect(evaluateWorkflowExpression("${{ " + packageStep.if + " }}", context)).toBe(!release);
     },
@@ -3316,9 +3338,9 @@ describe("ci workflow guards", () => {
     invalid?: boolean;
   }>([
     { eventName: "pull_request" as const, production: false, expected: false },
-    { eventName: "pull_request" as const, production: true, expected: true },
+    { eventName: "pull_request" as const, production: true, expected: false },
     { eventName: "workflow_dispatch", releaseGate: true, production: false, expected: false },
-    { eventName: "workflow_dispatch", releaseGate: true, production: true, expected: true },
+    { eventName: "workflow_dispatch", releaseGate: true, production: true, expected: false },
     { eventName: "push" as const, production: false, expected: true },
     { eventName: "push" as const, production: true, expected: true },
     { eventName: "workflow_dispatch" as const, production: false, expected: true },
@@ -7923,12 +7945,12 @@ describe("ci workflow guards", () => {
           {
             check_name: "android-test-third-party",
             task: "test-third-party",
-            app_lint: "third-party",
           },
           {
             check_name: "android-test-wear",
             task: "test-wear",
             lint: true,
+            app_lint: "third-party",
           },
           { check_name: "android-ktlint", task: "ktlint", app_lint: "play" },
         ]);
@@ -8486,12 +8508,12 @@ describe("ci workflow guards", () => {
       {
         check_name: "android-test-third-party",
         task: "test-third-party",
-        app_lint: "third-party",
       },
       {
         check_name: "android-test-wear",
         task: "test-wear",
         lint: true,
+        app_lint: "third-party",
       },
       { check_name: "android-ktlint", task: "ktlint", app_lint: "play" },
     ]);
