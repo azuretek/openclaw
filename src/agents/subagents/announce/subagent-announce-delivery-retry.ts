@@ -12,7 +12,6 @@ import {
 import { defaultRuntime } from "../../../runtime.js";
 import { isFailoverError } from "../../failover-error.js";
 import { isSessionTranscriptTurnMismatchErrorMessage } from "../../sessions/transcript-turn-error.js";
-import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 
 const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
 
@@ -21,17 +20,6 @@ export class SourceOwnerChangedError extends Error {
     super("subagent source lifecycle changed before completion delivery");
     this.name = "SourceOwnerChangedError";
   }
-}
-
-export function sourceOwnerChangedResult(): SubagentAnnounceDeliveryResult {
-  return {
-    delivered: false,
-    path: "none",
-    reason: "source_owner_changed",
-    error: "subagent source lifecycle changed before completion delivery",
-    terminal: true,
-    disposition: "intentional_non_delivery",
-  };
 }
 
 export function resolveSubagentAnnounceTimeoutMs(cfg: OpenClawConfig): number {
@@ -210,29 +198,20 @@ export function hasAnnounceSendEvidence(error: unknown): boolean {
 }
 
 export async function waitForAnnounceRetryDelay(ms: number, signal?: AbortSignal): Promise<void> {
-  if (ms <= 0) {
-    return;
-  }
-  if (!signal) {
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, ms);
-    });
-    return;
-  }
-  if (signal.aborted) {
+  if (ms <= 0 || signal?.aborted) {
     return;
   }
   await new Promise<void>((resolve) => {
     const timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
+      signal?.removeEventListener("abort", onAbort);
       resolve();
     }, ms);
     const onAbort = () => {
       clearTimeout(timer);
-      signal.removeEventListener("abort", onAbort);
+      signal?.removeEventListener("abort", onAbort);
       resolve();
     };
-    signal.addEventListener("abort", onAbort, { once: true });
+    signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
 
@@ -243,11 +222,15 @@ function resolveDirectAnnounceTransientRetryDelaysMs() {
 export async function runAnnounceDeliveryWithRetry<T>(params: {
   operation: string;
   signal?: AbortSignal;
+  prepareAttempt?: () => Promise<boolean>;
   isAttemptAllowed?: () => boolean;
   run: () => Promise<T>;
 }): Promise<T> {
   const retryDelaysMs = resolveDirectAnnounceTransientRetryDelaysMs();
   for (const [retryIndex, delayMs] of retryDelaysMs.entries()) {
+    if (params.prepareAttempt && !(await params.prepareAttempt())) {
+      throw new SourceOwnerChangedError();
+    }
     if (params.isAttemptAllowed?.() === false) {
       throw new SourceOwnerChangedError();
     }
@@ -270,6 +253,9 @@ export async function runAnnounceDeliveryWithRetry<T>(params: {
       );
       await waitForAnnounceRetryDelay(delayMs, params.signal);
     }
+  }
+  if (params.prepareAttempt && !(await params.prepareAttempt())) {
+    throw new SourceOwnerChangedError();
   }
   if (params.signal?.aborted) {
     throw new Error("announce delivery aborted");

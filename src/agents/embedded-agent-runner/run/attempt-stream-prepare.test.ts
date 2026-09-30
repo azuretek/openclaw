@@ -1,10 +1,8 @@
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMessageInjectionAuthority } from "../../../auto-reply/reply/message-injection-authority.js";
-import {
-  createReplyOperation,
-  expireStaleReplyOperation,
-} from "../../../auto-reply/reply/reply-run-registry.js";
+import { createReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
+import { expireStaleReplyOperation } from "../../../auto-reply/reply/reply-run-registry.state.js";
 import { CliPluginInvocationResources } from "../../../cli/plugin-invocation-resources.js";
 import { resolveDefaultSessionStorePath } from "../../../config/sessions/paths.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
@@ -65,7 +63,8 @@ vi.mock("../runs.js", () => ({
   clearActiveEmbeddedRun: mocks.clearActiveRun,
   setActiveEmbeddedRun: mocks.setActiveRun,
 }));
-vi.mock("./tool-activity-heartbeat.js", () => ({
+vi.mock("../../../shared/tool-activity-heartbeat.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../shared/tool-activity-heartbeat.js")>()),
   notifyToolActivity: mocks.notifyToolActivity,
 }));
 vi.mock("../../harness/lifecycle-hook-helpers.js", () => ({

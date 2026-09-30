@@ -19,13 +19,16 @@ function resolveUnconfiguredModel(modelId: string) {
 }
 
 describe("OpenAI model route contract", () => {
-  it.each(["gpt-6-sol", "gpt-6-luna"])("resolves both auth routes for %s", (modelId) => {
-    const result = resolveUnconfiguredModel(modelId);
-    expect(result.kind === "routes" ? result.routes.map((route) => route.api) : []).toEqual([
-      "openai-responses",
-      "openai-chatgpt-responses",
-    ]);
-  });
+  it.each(["gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"])(
+    "resolves both auth routes for %s",
+    (modelId) => {
+      const result = resolveUnconfiguredModel(modelId);
+      expect(result.kind === "routes" ? result.routes.map((route) => route.api) : []).toEqual([
+        "openai-responses",
+        "openai-chatgpt-responses",
+      ]);
+    },
+  );
 
   // #148559: gpt-5.4-nano has no static route contract, and OpenAI serves it only
   // on the Platform API. With nothing authored or observed it takes the Platform
