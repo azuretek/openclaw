@@ -14,7 +14,10 @@
  *   request.
  * - E: replacing the session store after the next turn leased the copy makes that
  *   turn refuse it before provider I/O.
+ * - F: a completion-bearing final send that FAILS at the channel leaves the durable
+ *   event and the steering copy pending, and one later reply then delivers it once.
  */
+import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
@@ -59,6 +62,9 @@ const ENV_KEYS = [
   "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
 ] as const;
 const PROOF_CHANNEL_ID = "exec-steering-proof";
+// Outbound text the failing-send proof marks; the proof channel refuses to deliver
+// it, so the completion-bearing final send fails at its delivery owner.
+const FAILING_SEND_MARKER = "PROOF_FAIL_SEND_F";
 // In-process gate the proof plugin's before_agent_run hook waits on. That hook runs
 // after the prompt build leased the exec steering copy and before provider dispatch.
 const PROOF_GATE_SYMBOL = "openclaw.execSteeringProof.gate";
@@ -120,7 +126,11 @@ function proof(label: string, data: Record<string, unknown>): void {
 
 // A minimal channel so the idle heartbeat has a real delivery route and runs a
 // model turn, instead of skipping the session as routeless.
-async function writeProofChannelPlugin(pluginDir: string, tracePath: string): Promise<void> {
+async function writeProofChannelPlugin(
+  pluginDir: string,
+  tracePath: string,
+  failureTracePath: string,
+): Promise<void> {
   await fs.mkdir(pluginDir, { recursive: true });
   await fs.writeFile(
     path.join(pluginDir, "openclaw.plugin.json"),
@@ -158,6 +168,10 @@ async function writeProofChannelPlugin(pluginDir: string, tracePath: string): Pr
       "        outbound: {",
       '          deliveryMode: "direct",',
       "          sendText: async ({ to, text }) => {",
+      `            if (typeof text === "string" && text.includes(${JSON.stringify(FAILING_SEND_MARKER)})) {`,
+      `              fs.appendFileSync(${JSON.stringify(failureTracePath)}, JSON.stringify({ to, text }) + "|");`,
+      '              throw new Error("injected final-send failure");',
+      "            }",
       `            fs.appendFileSync(${JSON.stringify(tracePath)}, JSON.stringify({ to, text }) + "\\n");`,
       `            return { channel: ${JSON.stringify(PROOF_CHANNEL_ID)}, messageId: "proof" };`,
       "          },",
@@ -317,7 +331,15 @@ describe("exec completion steering product proof", () => {
       deleteTestEnvValue("OPENCLAW_SKIP_CHANNELS");
       const pluginDir = path.join(workspaceDir, "plugins", PROOF_CHANNEL_ID);
       const deliveryTracePath = path.join(tempHome, "deliveries.jsonl");
-      await writeProofChannelPlugin(pluginDir, deliveryTracePath);
+      const finalSendFailuresPath = path.join(tempHome, "final-send-failures.txt");
+      await writeProofChannelPlugin(pluginDir, deliveryTracePath, finalSendFailuresPath);
+      const readFailedSendsSync = (): string[] => {
+        try {
+          return readFileSync(finalSendFailuresPath, "utf8").split("|").filter(Boolean);
+        } catch {
+          return [];
+        }
+      };
       const readDeliveries = async () =>
         (await fs.readFile(deliveryTracePath, "utf8").catch(() => "")).split("\n").filter(Boolean);
 
@@ -325,6 +347,7 @@ describe("exec completion steering product proof", () => {
       const holds = new Map<string, () => void>();
       const holdPhases = new Set<string>();
       let failingHeartbeatMarker: string | undefined;
+      let failingFinalSendMarker: string | undefined;
       const providerServer = createServer((request, response) => {
         void (async () => {
           const chunks: Buffer[] = [];
@@ -382,6 +405,19 @@ describe("exec completion steering product proof", () => {
                 error: { message: "injected provider refusal", type: "invalid_request_error" },
               }),
             );
+            return;
+          }
+          if (
+            // Phase F: the heartbeat turn that folds in a completion answers with a
+            // marked final reply the proof channel refuses to deliver, so the
+            // completion-bearing final send fails at its delivery owner.
+            failingFinalSendMarker &&
+            lastUser.includes(failingFinalSendMarker) &&
+            !lastUser.includes("PROOF_START") &&
+            !lastUser.includes("PROOF_FOLLOWUP")
+          ) {
+            record.kind = "heartbeat-failing-send";
+            writeText(response, `completion folded in ${FAILING_SEND_MARKER}`);
             return;
           }
           if (start && endsWithToolOutput(body)) {
@@ -829,6 +865,85 @@ describe("exec completion steering product proof", () => {
           expect(next?.lastUser ?? "").not.toContain(marker("E"));
           expect(steeringPending(key)).toBe(false);
         }
+        // Phase F: the completion arrives while the session is idle. The heartbeat
+        // turn that folds it in dispatches its final reply, the channel send FAILS,
+        // and the completion stays pending. One later reply then carries it exactly
+        // once and retires both representations.
+        {
+          const key = "agent:main:proof-final-send";
+          const hb = heartbeats.length;
+          failingFinalSendMarker = marker("F");
+          // The turn carries a real channel route, so its completion wake runs a
+          // model turn for this session instead of skipping it as routeless.
+          const first = await startRun({
+            sessionKey: key,
+            message: "PROOF_START F",
+            route: {
+              channel: PROOF_CHANNEL_ID,
+              to: "proof-final-destination",
+              accountId: "default",
+            },
+          });
+          proof("F.first-run", { status: await waitRun(first) });
+          const failingRequest = await waitFor(
+            "completion-bearing heartbeat request",
+            () =>
+              requests.find(
+                (request) =>
+                  request.kind === "heartbeat-failing-send" &&
+                  request.lastUser.includes(marker("F")),
+              ),
+            120_000,
+          );
+          const failedSends = await waitFor(
+            "failed final send",
+            () => {
+              const attempts = readFailedSendsSync();
+              return attempts.length > 0 ? attempts : false;
+            },
+            60_000,
+          );
+          // The failed delivery releases the lease: both copies stay pending so a
+          // later turn can still deliver the completion the user never saw.
+          await waitFor(
+            "F completion pending after failed final send",
+            () => durablePending(key, "F") && steeringPending(key),
+            30_000,
+          );
+          proof("F.failed-final-send", {
+            providerRequest: failingRequest.seq,
+            httpStatus: failingRequest.status,
+            requestCarriesCompletion: failingRequest.lastUser.includes(marker("F")),
+            failedSendAttempts: failedSends.length,
+            channelDeliveries: (await readDeliveries()).length,
+            durableEventPending: durablePending(key, "F"),
+            steeringPending: steeringPending(key),
+            heartbeats: heartbeatsSince(hb),
+          });
+          expect(failingRequest.lastUser).toContain(marker("F"));
+          expect(failedSends.length).toBeGreaterThan(0);
+          expect(durablePending(key, "F")).toBe(true);
+          expect(steeringPending(key)).toBe(true);
+          const second = await startRun({ sessionKey: key, message: "PROOF_FOLLOWUP F" });
+          proof("F.recovery-run", { status: await waitRun(second) });
+          failingFinalSendMarker = undefined;
+          const recovered = requestFor("PROOF_FOLLOWUP F");
+          const carriers = requests.filter((entry) => entry.lastUser.includes(marker("F")));
+          proof("F.recovery-provider-request", summary(recovered, "F"));
+          proof("F.provider-trace.failed-heartbeat", trace(failingRequest));
+          proof("F.provider-trace.recovery-turn", trace(recovered));
+          proof("F.settled", {
+            providerRequestsCarryingCompletion: carriers.length,
+            recoveryIsLastCarrier: carriers.at(-1)?.seq === recovered?.seq,
+            durableEventPending: durablePending(key, "F"),
+            steeringPending: steeringPending(key),
+          });
+          expect(recovered?.lastUser).toContain(marker("F"));
+          expect(carriers.at(-1)?.seq).toBe(recovered?.seq);
+          expect(durablePending(key, "F")).toBe(false);
+          expect(steeringPending(key)).toBe(false);
+        }
+
         proof("provider-requests", {
           total: requests.length,
           byKind: requests.reduce<Record<string, number>>((acc, entry) => {
