@@ -1,7 +1,10 @@
 import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AuthProfileStore } from "../auth-profiles.js";
-import { createApiKeyCredential } from "../auth-profiles/credential-fixtures.test-support.js";
+import {
+  createApiKeyCredential,
+  createOAuthRefreshCredential,
+} from "../auth-profiles/credential-fixtures.test-support.js";
 import { prepareAgentRuntimeAuthPlan } from "./prepare-auth.test-support.js";
 
 // This suite owns the Platform-route requirement for a first-party id that has no
@@ -61,16 +64,6 @@ it("accepts an API key for a contract-less first-party id on the Platform route"
   });
 });
 
-function chatGPTOAuth() {
-  return {
-    type: "oauth" as const,
-    provider: "openai",
-    access: "***",
-    refresh: "***",
-    expires: Date.now() + 60_000,
-  };
-}
-
 // OpenAI rejects nano on a ChatGPT account ("not supported when using Codex with a
 // ChatGPT account"), so an unauthored ChatGPT login is refused before any request
 // rather than sent to a route that can never answer.
@@ -78,7 +71,7 @@ it("refuses an OAuth-only unauthored nano before any request", () => {
   expect(() =>
     prepareAgentRuntimeAuthPlan({
       ...codexNanoFixture(),
-      authProfileStore: authStore({ "openai:chatgpt": chatGPTOAuth() }),
+      authProfileStore: authStore({ "openai:chatgpt": createOAuthRefreshCredential() }),
     }),
   ).toThrow("No route-compatible authentication source is configured for openai.");
 });
@@ -91,7 +84,7 @@ it("refuses an OAuth-only nano when a Platform row is observed", () => {
       ...codexNanoFixture(),
       modelApi: "openai-responses",
       modelBaseUrl: "https://api.openai.com/v1",
-      authProfileStore: authStore({ "openai:chatgpt": chatGPTOAuth() }),
+      authProfileStore: authStore({ "openai:chatgpt": createOAuthRefreshCredential() }),
     }),
   ).toThrow("No route-compatible authentication source is configured for openai.");
 });
@@ -116,7 +109,7 @@ it("uses the API key for nano when both credentials are available", () => {
   const plan = prepareAgentRuntimeAuthPlan({
     ...codexNanoFixture(),
     authProfileStore: authStore({
-      "openai:chatgpt": chatGPTOAuth(),
+      "openai:chatgpt": createOAuthRefreshCredential(),
       "openai:platform": createApiKeyCredential("openai", "platform-key"),
     }),
   });
