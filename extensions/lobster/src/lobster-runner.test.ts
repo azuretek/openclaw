@@ -88,7 +88,7 @@ describe("createEmbeddedLobsterRunner", () => {
       runToolRequest: vi.fn<Runtime["runToolRequest"]>().mockResolvedValue(success),
       resumeToolRequest: vi.fn<Runtime["resumeToolRequest"]>(),
     };
-    const llmAdapters = { openclaw: { source: "openclaw", invoke: vi.fn() } };
+    const llmAdapters = { embedded: { source: "openclaw-embedded", invoke: vi.fn() } };
     const runner = createEmbeddedLobsterRunner({
       loadRuntime: vi.fn().mockResolvedValue(runtime),
       llmAdapters,
@@ -277,8 +277,8 @@ describe("createEmbeddedLobsterRunner", () => {
       },
     ];
     const llmAdapters = {
-      openclaw: {
-        source: "openclaw",
+      embedded: {
+        source: "openclaw-embedded",
         invoke: vi.fn(async ({ payload }: { payload: unknown }) => {
           payloads.push(payload);
           return responses[payloads.length - 1];
@@ -293,7 +293,7 @@ describe("createEmbeddedLobsterRunner", () => {
       additionalProperties: false,
     });
     const pipeline =
-      "llm.invoke --provider openclaw --prompt classify --output-schema '" +
+      "llm.invoke --provider embedded --prompt classify --output-schema '" +
       schema +
       "' --max-validation-retries 1 --disable-cache";
 
@@ -314,6 +314,29 @@ describe("createEmbeddedLobsterRunner", () => {
         }),
       ],
     });
+  });
+
+  it("leaves the existing openclaw HTTP provider route unshadowed by the embedded adapter", async () => {
+    vi.stubEnv("OPENCLAW_URL", undefined);
+    vi.stubEnv("CLAWD_URL", undefined);
+    vi.stubEnv("LOBSTER_STATE_DIR", tempDirs.make("openclaw-lobster-route-"));
+    const invoke = vi.fn();
+    const runner = createEmbeddedLobsterRunner({
+      llmAdapters: { embedded: { source: "openclaw-embedded", invoke } },
+    });
+    const schema = JSON.stringify({ type: "object", additionalProperties: true });
+    const pipeline =
+      "llm.invoke --provider openclaw --prompt classify --output-schema '" +
+      schema +
+      "' --disable-cache";
+
+    // provider=openclaw must still resolve to Lobster's HTTP route and fail
+    // closed without a Gateway URL, rather than silently reaching the embedded
+    // in-process adapter registered under a different provider id.
+    await expect(runner.run(runParams({ pipeline, maxStdoutBytes: 16_384 }))).rejects.toThrow(
+      /OPENCLAW_URL/,
+    );
+    expect(invoke).not.toHaveBeenCalled();
   });
 
   it("requires a pipeline for run", async () => {

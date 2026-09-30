@@ -67,7 +67,9 @@ describe("lobster plugin tool", () => {
       .mockReturnValue(runner);
     try {
       createLobsterTool(fakeApi({ runtime }));
-      const adapter = runnerFactory.mock.calls[0]?.[0]?.llmAdapters?.openclaw;
+      const adapters = runnerFactory.mock.calls[0]?.[0]?.llmAdapters;
+      expect(adapters?.openclaw).toBeUndefined();
+      const adapter = adapters?.embedded;
       if (!adapter) {
         throw new Error("expected an OpenClaw LLM adapter");
       }
@@ -138,7 +140,7 @@ describe("lobster plugin tool", () => {
         .mockReturnValue({ run: vi.fn() });
       try {
         createLobsterTool(fakeApi({ runtime }));
-        const adapter = runnerFactory.mock.calls[0]?.[0]?.llmAdapters?.openclaw;
+        const adapter = runnerFactory.mock.calls[0]?.[0]?.llmAdapters?.embedded;
         if (!adapter) {
           throw new Error("expected an OpenClaw LLM adapter");
         }
@@ -172,7 +174,7 @@ describe("lobster plugin tool", () => {
       .mockReturnValue({ run: vi.fn() });
     try {
       createLobsterTool(fakeApi({ runtime }));
-      const adapter = runnerFactory.mock.calls[0]?.[0]?.llmAdapters?.openclaw;
+      const adapter = runnerFactory.mock.calls[0]?.[0]?.llmAdapters?.embedded;
       if (!adapter) {
         throw new Error("expected an OpenClaw LLM adapter");
       }

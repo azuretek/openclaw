@@ -226,14 +226,14 @@ openclaw.invoke --tool llm-task --action json --args-json '{
 }'
 ```
 
-For model-backed steps in the embedded OpenClaw runner, use Lobster’s native `llm.invoke --provider openclaw` stage. The plugin supplies an in-process adapter through `ctx.llmAdapters` and calls the host-owned `api.runtime.llm.complete` API in `isolated-agent-runtime` mode. Model and credential selection belongs to the host completion API. This registration-time capability uses the host’s ambient owner agent, not necessarily the agent invoking the tool; multi-agent configurations should set `agents.defaults.systemAgent.agentId` to the intended owner. Without an ambient owner, the host refuses an ambiguous multi-agent selection. It does not add Gateway URL or token values to `ctx.env`; an explicit model override is subject to `plugins.entries.lobster.llm` policy.
+For model-backed steps in the embedded OpenClaw runner, use Lobster’s native `llm.invoke --provider embedded` stage. The plugin supplies an in-process adapter through `ctx.llmAdapters` and calls the host-owned `api.runtime.llm.complete` API in `isolated-agent-runtime` mode. Model and credential selection belongs to the host completion API. This registration-time capability uses the host’s ambient owner agent, not necessarily the agent invoking the tool; multi-agent configurations should set `agents.defaults.systemAgent.agentId` to the intended owner. Without an ambient owner, the host refuses an ambiguous multi-agent selection. It does not add Gateway URL or token values to `ctx.env`; an explicit model override is subject to `plugins.entries.lobster.llm` policy.
 
 Malformed JSON fails the stage without being cached or silently converted to `null`. Valid JSON that fails the output schema follows Lobster’s configured schema-validation retry policy. The adapter adds no separate inference retries.
 
 Example workflow step:
 
 ```lobster
-llm.invoke --provider openclaw --prompt 'Classify this item' --output-schema '{"type":"object","properties":{"category":{"type":"string"}},"required":["category"],"additionalProperties":false}'
+llm.invoke --provider embedded --prompt 'Classify this item' --output-schema '{"type":"object","properties":{"category":{"type":"string"}},"required":["category"],"additionalProperties":false}'
 ```
 
 The isolated runtime may retain built-in helpers, so this is not a literal zero-tool guarantee for every harness. Use another runtime if the workflow requires that guarantee. Nested `openclaw.invoke` still does not inherit Gateway URL/auth context; do not put credentials in workflow files or arguments. See [LLM Task](/tools/llm-task) for host-owned model and authentication policy details.

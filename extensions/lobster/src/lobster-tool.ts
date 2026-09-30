@@ -31,7 +31,7 @@ function stripJsonCodeFences(text: string): string {
 
 function createOpenClawLlmAdapter(api: OpenClawPluginApi) {
   return {
-    source: "openclaw",
+    source: "openclaw-embedded",
     async invoke({ payload, signal }: { payload: unknown; signal?: AbortSignal }) {
       if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
         throw new Error("Lobster LLM payload must be an object");
@@ -100,7 +100,12 @@ export function createLobsterTool(api: OpenClawPluginApi, options?: LobsterToolO
   const runner =
     options?.runner ??
     createEmbeddedLobsterRunner({
-      llmAdapters: { openclaw: createOpenClawLlmAdapter(api) },
+      // Register under a distinct provider id. Using "openclaw" here would
+      // shadow the existing HTTP provider route (Lobster prefers a direct
+      // ctx.llmAdapters entry over its HTTP adapter for the same provider), so
+      // existing provider=openclaw workflows would silently switch from their
+      // configured Gateway URL/token to host-owned inference on upgrade.
+      llmAdapters: { embedded: createOpenClawLlmAdapter(api) },
     });
   return {
     name: "lobster",

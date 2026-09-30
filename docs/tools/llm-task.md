@@ -135,7 +135,7 @@ pattern is **not currently reliable**:
 openclaw.invoke --tool llm-task --action json --args-json '{ ... }'
 ```
 
-For embedded Lobster, use the plugin’s native `llm.invoke --provider openclaw` stage. It calls the host-owned `api.runtime.llm.complete` API and does not invoke this separate optional `llm-task` tool. Explicit model overrides follow the Lobster plugin’s `plugins.entries.lobster.llm` authorization policy. As with this tool, `isolated-agent-runtime` may retain built-in helpers, so it is not a literal zero-tool guarantee for every harness. See [Lobster](/tools/lobster) for the embedded workflow syntax.
+For embedded Lobster, use the plugin’s native `llm.invoke --provider embedded` stage. It calls the host-owned `api.runtime.llm.complete` API and does not invoke this separate optional `llm-task` tool. Explicit model overrides follow the Lobster plugin’s `plugins.entries.lobster.llm` authorization policy. As with this tool, `isolated-agent-runtime` may retain built-in helpers, so it is not a literal zero-tool guarantee for every harness. See [Lobster](/tools/lobster) for the embedded workflow syntax.
 
 Standalone Lobster CLI example:
 
