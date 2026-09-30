@@ -1,5 +1,4 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-// Skill contract types describe loaded skill metadata, sources, and prompt surfaces.
 import type { SourceInfo } from "../../agents/sessions/source-info.js";
 
 export interface Skill {
@@ -15,6 +14,8 @@ export interface Skill {
   contentHash?: string;
   filePath: string;
   baseDir: string;
+  /** Discovery provenance for collision diagnostics, never read authority. */
+  discoveryRoot?: { path: string; worktree: boolean };
   /** Assigned by Gateway discovery, never accepted from the workspace provider. */
   fileHost?: "gateway" | "workspace";
   /** @deprecated Ignored; retained for API compatibility until the next Plugin SDK major. */

@@ -53,7 +53,7 @@ type ChannelCapabilitiesReport = {
   configured?: boolean;
   enabled?: boolean;
   support?: ChannelCapabilities;
-  actions?: string[];
+  actions: string[];
   probe?: unknown;
   diagnostics?: ChannelCapabilitiesDiagnostics;
 };
@@ -111,38 +111,22 @@ function formatSupport(capabilities?: ChannelCapabilities) {
   if (capabilities.chatTypes?.length) {
     bits.push(`chatTypes=${capabilities.chatTypes.join(",")}`);
   }
-  if (capabilities.polls) {
-    bits.push("polls");
-  }
-  if (capabilities.reactions) {
-    bits.push("reactions");
-  }
-  if (capabilities.edit) {
-    bits.push("edit");
-  }
-  if (capabilities.unsend) {
-    bits.push("unsend");
-  }
-  if (capabilities.reply) {
-    bits.push("reply");
-  }
-  if (capabilities.effects) {
-    bits.push("effects");
-  }
-  if (capabilities.groupManagement) {
-    bits.push("groupManagement");
-  }
-  if (capabilities.threads) {
-    bits.push("threads");
-  }
-  if (capabilities.media) {
-    bits.push("media");
-  }
-  if (capabilities.nativeCommands) {
-    bits.push("nativeCommands");
-  }
-  if (capabilities.blockStreaming) {
-    bits.push("blockStreaming");
+  for (const capability of [
+    "polls",
+    "reactions",
+    "edit",
+    "unsend",
+    "reply",
+    "effects",
+    "groupManagement",
+    "threads",
+    "media",
+    "nativeCommands",
+    "blockStreaming",
+  ] as const) {
+    if (capabilities[capability]) {
+      bits.push(capability);
+    }
   }
   return bits.length ? bits.join(" ") : "none";
 }
@@ -241,9 +225,7 @@ async function resolveChannelReports(params: {
       }),
       includeActions: true,
     }).actions;
-    const actions = Array.from(
-      new Set<string>(["send", "broadcast", ...discoveredActions.map((action) => action)]),
-    );
+    const actions = Array.from(new Set<string>(["send", "broadcast", ...discoveredActions]));
 
     reports.push({
       plugin,
@@ -381,9 +363,7 @@ export async function channelsCapabilitiesCommand(
     });
     lines.push(theme.heading(label));
     lines.push(`Support: ${formatSupport(report.support)}`);
-    if (report.actions && report.actions.length > 0) {
-      lines.push(`Actions: ${report.actions.join(", ")}`);
-    }
+    lines.push(`Actions: ${report.actions.join(", ")}`);
     if (report.configured === false || report.enabled === false) {
       const configuredLabel = report.configured === false ? "not configured" : "configured";
       const enabledLabel = report.enabled === false ? "disabled" : "enabled";

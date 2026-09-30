@@ -72,11 +72,8 @@ import { persistAgentSession } from "./attempt-execution.shared.js";
 import { normalizeAgentCommandModelRef, parseAgentCommandModelRef } from "./model-ref.js";
 import { prepareCommandModelCatalog } from "./model-selection-catalog.js";
 import { normalizeExplicitOverrideInput } from "./prepare.js";
-import type { resolveAgentRunContext } from "./run-context.js";
 import { loadTranscriptResolveRuntime } from "./runtime-loaders.js";
-import type { AgentCommandOpts } from "./types.js";
-
-type AgentRunContext = ReturnType<typeof resolveAgentRunContext>;
+import type { AgentCommandOpts, AgentRunContext } from "./types.js";
 
 export async function resolveEmbeddedModelSelection(params: {
   cfg: OpenClawConfig;
@@ -217,15 +214,10 @@ export async function resolveEmbeddedModelSelection(params: {
         assertCommitAllowed: operatorAuthority?.assertCurrent,
       });
       const adoptedModelOverrideSource = sessionEntry?.modelOverrideSource;
-      const adoptedHasStoredOverride = Boolean(
+      const adoptedHasStoredOverride =
         adoptedModelOverrideSource !== "default" &&
-        (sessionEntry?.modelOverride || sessionEntry?.providerOverride),
-      );
-      storedModelOverrideSource = adoptedHasStoredOverride
-        ? adoptedModelOverrideSource === "default"
-          ? undefined
-          : adoptedModelOverrideSource
-        : undefined;
+        Boolean(sessionEntry?.modelOverride || sessionEntry?.providerOverride);
+      storedModelOverrideSource = adoptedHasStoredOverride ? adoptedModelOverrideSource : undefined;
       hasStoredAutoFallbackProvenance =
         adoptedHasStoredOverride && hasSessionAutoModelFallbackProvenance(sessionEntry);
       hasLegacyAutoFallbackOverrideWithoutOrigin =

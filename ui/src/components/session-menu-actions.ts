@@ -113,10 +113,7 @@ export class SessionMenuActions {
     private readonly onClose: () => void,
   ) {
     this.context = new ContextConsumer(host, { context: applicationContext, subscribe: true });
-    new SubscriptionsController(host).watch(
-      () => this.context.value?.gateway,
-      (gateway, notify) => gateway.subscribe(notify),
-    );
+    new SubscriptionsController(host).watchStore(() => this.context.value?.gateway);
     this.ownerMenu = new SessionOwnerMenu(host);
   }
 
@@ -136,10 +133,6 @@ export class SessionMenuActions {
   private actionDisabled(kind: SessionManagementActionKind, extra = false): boolean {
     const state = this.readState();
     return state.disabled || extra || Boolean(state.actionDisabledReasons[kind]);
-  }
-
-  private actionTitle(kind: SessionManagementActionKind): string | typeof nothing {
-    return this.readState().actionDisabledReasons[kind] ?? nothing;
   }
 
   private actionExtraDisabled(kind: SessionManagementActionKind): boolean {
@@ -361,7 +354,7 @@ export class SessionMenuActions {
     }
     const shortcut = view === "icon" ? "i" : view === "copy" ? "c" : undefined;
     return html`<wa-dropdown-item
-      class="session-menu__item"
+      class=${`session-menu__item${view === "assign-owner" ? " people-menu__submenu" : ""}`}
       ?disabled=${disabled}
       title=${title ?? nothing}
       data-shortcut=${shortcut ?? nothing}
@@ -556,22 +549,12 @@ export class SessionMenuActions {
     return html`
       ${
         state.navigationAllowed
-          ? html`
-              ${this.renderItem(
-                "copy-session-link",
-                t("sessionsView.copySessionLink"),
-                icons.link,
-                {
-                  inline,
-                },
-              )}
-              ${this.renderItem(
-                "copy-session-preview-link",
-                t("sessionsView.copySessionPreviewLink"),
-                icons.link,
-                { inline },
-              )}
-            `
+          ? (
+              [
+                ["copy-session-link", "sessionsView.copySessionLink"],
+                ["copy-session-preview-link", "sessionsView.copySessionPreviewLink"],
+              ] as const
+            ).map(([kind, label]) => this.renderItem(kind, t(label), icons.link, { inline }))
           : nothing
       }
       ${this.renderItem("copy-markdown", t("sessionsView.copyMarkdown"), icons.fileText, {
@@ -586,31 +569,22 @@ export class SessionMenuActions {
     return html`
       ${
         state.navigationAllowed
-          ? html`
-              ${this.renderItem("open-new-tab", t("sessionsView.openNewTab"), icons.externalLink, {
-                inline,
-              })}
-              ${this.renderItem("open-new-window", t("sessionsView.openNewWindow"), icons.monitor, {
-                inline,
-              })}
-            `
+          ? (
+              [
+                ["open-new-tab", "sessionsView.openNewTab", icons.externalLink],
+                ["open-new-window", "sessionsView.openNewWindow", icons.monitor],
+              ] as const
+            ).map(([kind, label, icon]) => this.renderItem(kind, t(label), icon, { inline }))
           : nothing
       }
       ${
         state.splitAllowed
-          ? html`
-              ${this.renderItem("split-right", t("chat.splitView.splitRight"), icons.columns2, {
-                inline,
-              })}
-              ${this.renderItem(
-                "split-below",
-                t("sessionsView.splitBelow"),
-                icons.panelBottomOpen,
-                {
-                  inline,
-                },
-              )}
-            `
+          ? (
+              [
+                ["split-right", "chat.splitView.splitRight", icons.columns2],
+                ["split-below", "sessionsView.splitBelow", icons.panelBottomOpen],
+              ] as const
+            ).map(([kind, label, icon]) => this.renderItem(kind, t(label), icon, { inline }))
           : nothing
       }
       ${state.renderOpenInExtra?.(inline) ?? nothing}
@@ -635,7 +609,7 @@ export class SessionMenuActions {
       categoryClearReturnsToGroups: state.session.categoryClearReturnsToGroups,
       groups: state.groups,
       actionDisabled: (kind) => this.actionDisabled(kind),
-      actionTitle: (kind) => this.actionTitle(kind),
+      actionTitle: (kind) => state.actionDisabledReasons[kind] ?? nothing,
     });
   }
 
@@ -665,7 +639,7 @@ export class SessionMenuActions {
       onBack: this.showIconGrid,
       onInput: this.updateCustomIconValue,
       onApply: this.applyCustomIcon,
-      onGridKeydown: this.handleIconGridKeydown,
+      onGridKeydown: handleAppearanceGridKeydown,
     });
   }
 
@@ -716,8 +690,6 @@ export class SessionMenuActions {
       this.runAction({ kind: "set-icon", icon });
     }
   };
-
-  private readonly handleIconGridKeydown = handleAppearanceGridKeydown;
 
   private readonly focusAppearanceOnOpen = (event: CustomEvent<{ item: HTMLElement }>) => {
     const item = event.currentTarget;

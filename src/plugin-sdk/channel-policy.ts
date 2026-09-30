@@ -1,4 +1,3 @@
-// Channel policy helpers evaluate plugin channel runtime policy and operator-facing warnings.
 import { asNullableRecord as asObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeStringEntries,
@@ -134,37 +133,21 @@ export function evaluateSenderGroupAccessForPolicy(params: {
   isSenderAllowed: (senderId: string, allowFrom: string[]) => boolean;
 }): SenderGroupAccessDecision {
   const providerMissingFallbackApplied = Boolean(params.providerMissingFallbackApplied);
+  let reason: SenderGroupAccessDecision["reason"] = "allowed";
   if (params.groupPolicy === "disabled") {
-    return {
-      allowed: false,
-      groupPolicy: params.groupPolicy,
-      providerMissingFallbackApplied,
-      reason: "disabled",
-    };
-  }
-  if (params.groupPolicy === "allowlist") {
+    reason = "disabled";
+  } else if (params.groupPolicy === "allowlist") {
     if (params.groupAllowFrom.length === 0) {
-      return {
-        allowed: false,
-        groupPolicy: params.groupPolicy,
-        providerMissingFallbackApplied,
-        reason: "empty_allowlist",
-      };
-    }
-    if (!params.isSenderAllowed(params.senderId, params.groupAllowFrom)) {
-      return {
-        allowed: false,
-        groupPolicy: params.groupPolicy,
-        providerMissingFallbackApplied,
-        reason: "sender_not_allowlisted",
-      };
+      reason = "empty_allowlist";
+    } else if (!params.isSenderAllowed(params.senderId, params.groupAllowFrom)) {
+      reason = "sender_not_allowlisted";
     }
   }
   return {
-    allowed: true,
+    allowed: reason === "allowed",
     groupPolicy: params.groupPolicy,
     providerMissingFallbackApplied,
-    reason: "allowed",
+    reason,
   };
 }
 
