@@ -228,14 +228,14 @@ function resolveEmbeddedEnv(
   llmAdapters?: Record<string, EmbeddedLlmAdapter>,
 ): Record<string, string | undefined> {
   const env: Record<string, string | undefined> = { ...base };
-  if (!llmAdapters || String(env.LOBSTER_LLM_PROVIDER ?? "").trim()) {
+  if (!llmAdapters || (env.LOBSTER_LLM_PROVIDER ?? "").trim()) {
     return env;
   }
-  const detected = String(env.LOBSTER_PI_LLM_ADAPTER_URL ?? "").trim()
+  const detected = (env.LOBSTER_PI_LLM_ADAPTER_URL ?? "").trim()
     ? "pi"
-    : String(env.OPENCLAW_URL ?? env.CLAWD_URL ?? "").trim()
+    : (env.OPENCLAW_URL ?? env.CLAWD_URL ?? "").trim()
       ? "openclaw"
-      : String(env.LOBSTER_LLM_ADAPTER_URL ?? "").trim()
+      : (env.LOBSTER_LLM_ADAPTER_URL ?? "").trim()
         ? "http"
         : "";
   if (detected) {
