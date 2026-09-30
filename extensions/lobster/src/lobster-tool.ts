@@ -36,6 +36,7 @@ function createOpenClawLlmAdapter(api: OpenClawPluginApi) {
       if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
         throw new Error("Lobster LLM payload must be an object");
       }
+      // SAFETY: payload was narrowed to a non-null, non-array object; fields are validated below.
       const request = payload as LobsterLlmPayload;
       if (typeof request.prompt !== "string" || !request.prompt.trim()) {
         throw new Error("Lobster LLM payload requires a prompt");
