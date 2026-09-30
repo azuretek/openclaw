@@ -39,7 +39,6 @@ import {
 } from "../../../../src/infra/heartbeat-events.js";
 import { resolveSystemEventQueueKey } from "../../../../src/infra/system-event-ownership.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../../../src/infra/system-events.js";
-import { resetTaskRegistryForTests } from "../../../../src/tasks/task-runtime.test-helpers.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../../../src/test-utils/env.js";
 import { writeOpenAiResponsesSse } from "../../../helpers/openai-responses-sse.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
@@ -113,7 +112,6 @@ function resetState(): void {
   resetAgentEventsForTest({ preserveListeners: true });
   resetSystemEventsForTest();
   resetExecSteeringQueueForTest();
-  resetTaskRegistryForTests({ persist: false });
 }
 
 function proof(label: string, data: Record<string, unknown>): void {

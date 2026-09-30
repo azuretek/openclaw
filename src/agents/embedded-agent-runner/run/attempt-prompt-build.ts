@@ -74,6 +74,7 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type HookRunner = ReturnType<typeof getGlobalHookRunner>;
 type OrphanRepairPlan = ReturnType<typeof resolveOrphanRepairPlan>;
+type PromptBuildHookContext = Parameters<typeof resolvePromptBuildHookResult>[0]["hookCtx"];
 
 type EmbeddedAttemptSteeringLease = {
   leaseId: string;
