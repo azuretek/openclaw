@@ -381,7 +381,7 @@ describe("createEmbeddedLobsterRunner", () => {
     expect(context?.env?.LOBSTER_LLM_PROVIDER).toBe("openclaw");
   });
 
-  it("forces gateway execution instead of an external replay, and leaves a run without the adapter alone", async () => {
+  it("executes instead of replaying for every run it supplies the adapter to", async () => {
     vi.stubEnv("OPENCLAW_URL", "http://127.0.0.1:1/");
     vi.stubEnv("CLAWD_URL", undefined);
     vi.stubEnv("LOBSTER_LLM_PROVIDER", undefined);
@@ -389,8 +389,8 @@ describe("createEmbeddedLobsterRunner", () => {
     vi.stubEnv("LOBSTER_LLM_ADAPTER_URL", undefined);
     vi.stubEnv("LOBSTER_LLM_FORCE_REFRESH", undefined);
 
-    // A workflow with its own route keeps Lobster's existing behaviour, saved
-    // result reuse included.
+    // A route of its own still takes the route, but reuse is off for the run,
+    // because a saved embedded result cannot be authorized per provider.
     const withRoute = {
       runToolRequest: vi.fn<Runtime["runToolRequest"]>().mockResolvedValue(success),
       resumeToolRequest: vi.fn<Runtime["resumeToolRequest"]>(),
@@ -401,7 +401,7 @@ describe("createEmbeddedLobsterRunner", () => {
     }).run(runParams());
     const routed = withRoute.runToolRequest.mock.calls[0]?.[0].ctx;
     expect(routed?.env?.LOBSTER_LLM_PROVIDER).toBe("openclaw");
-    expect(routed?.env?.LOBSTER_LLM_FORCE_REFRESH).toBeUndefined();
+    expect(routed?.env?.LOBSTER_LLM_FORCE_REFRESH).toBe("1");
 
     // With no route of its own the run can only reach the embedded route, which
     // must be executed by the gateway rather than replayed.

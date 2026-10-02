@@ -231,6 +231,13 @@ function resolveEmbeddedEnv(
   if (!llmAdapters) {
     return env;
   }
+  // The embedded route spends the gateway's model authority through the host
+  // completion API, and Lobster's run-state and persistent-cache branches return a
+  // saved result before the adapter is consulted, so a replay would authorize
+  // nothing. Reuse cannot be scoped to the embedded provider with the controls
+  // Lobster exposes, so every run this plugin supplies the adapter to executes its
+  // LLM stages rather than replaying them.
+  env.LOBSTER_LLM_FORCE_REFRESH = "1";
   if ((env.LOBSTER_LLM_PROVIDER ?? "").trim()) {
     return env;
   }
@@ -242,17 +249,8 @@ function resolveEmbeddedEnv(
         ? "http"
         : "";
   if (detected) {
-    // A workflow with a route of its own keeps Lobster's existing behaviour,
-    // reuse of its saved results on that route included.
     env.LOBSTER_LLM_PROVIDER = detected;
-    return env;
   }
-  // With no route of its own, this run can only reach the embedded adapter, which
-  // spends the gateway's model authority through the host completion API. A replay
-  // authorizes nothing, because Lobster's run-state and persistent-cache branches
-  // return a saved result before the adapter is consulted, so the embedded route
-  // is executed by the gateway rather than replayed.
-  env.LOBSTER_LLM_FORCE_REFRESH = "1";
   return env;
 }
 
