@@ -454,17 +454,23 @@ the mutation or converting the original error into success. Failed reconciliatio
 or reader retirement remains owned by canonical close for retry. Profile schema,
 avatar bytes, fetch limits, and final identity and permission checks are unchanged.
 
-Required queued collector registration writes its named registry rows through the
-shared-state worker. The host captures those rows and deletions before waiting,
-and binds SQL values from the isolated capture without copying the full payload again.
-Binding retains both normalization passes and restores the capture before publication.
-The host retains the original database admission and authorizes the transaction again
-before mutation and commit. Synchronous Stop, replacement, and completion writes
-supersede pending row authority; delayed worker acknowledgments cannot overwrite
-newer local projections or notification history. Database shutdown joins physical
-settlement and publication. Acknowledged changes reach the live registry before
-read-cache updates and reader wakes; pending terminal writes remain invisible to
-cleanup readers. Unknown write outcomes are never replayed.
+Subagent registry mutations use one row owner, including registration, cancellation,
+replacement, completion, requester wakes, and recovery. Per-row FIFO admission
+precedes synchronous planning against immutable published values; multi-row plans
+admit their sorted keys together. The worker compares digests of the stored payload
+and indexed ownership columns before writing, then returns acknowledged versions.
+Foreign conflicts refresh authoritative rows through the read worker and replan up
+to three times. Genuine execution, cancellation, and requester-cohort ownership
+loss remains an explicit rejection.
+
+Only committed postimages become resident rows. Runtime custody follows the same
+execution across metadata publications, while actual execution replacement revokes
+it. Recovery after an in-process Gateway replacement acquires a new runtime
+incarnation under row admission without changing the durable execution generation.
+Eligible terminal session-state events share the row transaction. Unknown write
+outcomes fence affected rows until canonical restore; they never authorize replay.
+The digest requires no new column, schema migration, or updater behavior, and also
+detects writes from older processes that cannot maintain a new revision column.
 
 Provisional cancellation claims keep registration pending until their owner releases
 or confirms them. Existing persistence notifications wake the wait; work cancellation,
@@ -695,6 +701,19 @@ before the effect. A reopened database cannot replace a retired run context.
 Missing receipt storage refuses execution without creating tables. Synchronous
 message-action and message-source guards retain their existing current-read
 owner; these finite awaited checks do not replace those later effect guards.
+
+Doctor awaits quarantined Cron rows through the shared-state read worker. The
+existing query order and payload decoder remain with the Cron store; captured
+source ownership, inherited snapshots, schema errors, and missing-database
+behavior come from the existing reader. Observing quarantine never creates or
+migrates storage. Standalone quarantine registration captures its original source
+and serializes the recovery records before awaiting the existing Cron writer.
+Doctor waits for that registration before archiving a legacy quarantine file;
+refusal or an uncertain write outcome leaves the file available for recovery.
+The same synchronous batch kernel remains inside full-store repair transactions.
+Legacy sequence ordering, first recovery timestamps, record identities, and
+retention are unchanged. Other Doctor fingerprint and metadata transaction hooks
+retain their native owner.
 
 iMessage outbound receipt recovery reads the external Messages SQLite database
 through the shared worker broker. Its plugin owns the read-only GUID queries;
@@ -940,11 +959,10 @@ reads use native run state rather than restoring a shared Tasks registry.
 Terminal subagent cancellation prepares retained child-session rows in the
 shared-state read worker, retries after registry publication changes, and applies current
 live runs last. Each synchronous decision retains the original database admission.
-Failed best-effort publications remain authoritative through cache hydration:
-fresh reads overlay unpublished named changes or an explicitly failed full
-replacement. Exact successful commits release only their rows back to durable
-reads; full success and restore clear that intent. These overlays remain bound to
-their producing database, and returned persisted records cannot mutate them.
+Refused writes leave the last committed projection intact. Cold reads retain
+acknowledged row changes until their first full snapshot, and canonical restore
+replaces those facts under the same database owner. Returned records cannot
+mutate immutable resident rows.
 The progress observer uses its existing live-run owner, matching the admission
 and generation checks that already require a live entry.
 Inspection links prepare their configuration through the existing asynchronous
@@ -2115,6 +2133,17 @@ maintenance still refuses busy truncation before compaction or recovery proceeds
 The read cache's version-gated `NOOP` probe remains a freshness observation.
 This ownership cut changes no schema, stored bytes, admission, or update behavior.
 
+Each WAL connection owns a scheduler scope for checkpoint ticks and bounded
+reclamation. Orderly database retirement stops timer admission and joins accepted
+maintenance before the final checkpoint and native close. Shared connections
+retire maintenance only when their final native reference is released; closing
+one worker actor does not stop a sibling's maintenance. Synchronous exit and
+failed-open cleanup remain best-effort cancellation paths. The deprecated
+synchronous debug-capture store keeps that same close contract.
+Checkpoint modes, write admission, stored bytes, and reclamation limits are
+unchanged. Updates require no schema or configuration migration; the new process
+reconstructs its connection-owned schedules from the existing database owners.
+
 SQLite FTS5/BM25, vector tables, JSON table-valued queries, attached shadow
 databases, WAL maintenance, integrity checks, and backup operations remain
 SQLite capabilities. Keep their implementation behind the memory or database
@@ -2149,6 +2178,15 @@ not authorize writes: live caller admission and transaction-held session and
 cross-store catalog checks remain with the mutation owners. Process-local
 incognito databases retain their native owner. Schema, stored bytes, retention,
 and update behavior are unchanged.
+
+Upstream session monitoring uses its scheduler scope to cancel future probes and
+join accepted work. Session reads use the existing read worker; event recording
+and marker settlement revalidate the idle session at transaction and commit
+admission. The shared-state worker compares the complete scanned upstream link
+before advancing its marker or removing a missing source. Durable event insertion
+or deduplication still precedes marker settlement. Failed event recording leaves
+the marker available for the next probe. Schemas, stored bytes, retention, provider
+contracts, and update behavior are unchanged; no migration is required.
 
 ## Review checkpoint for material changes
 
