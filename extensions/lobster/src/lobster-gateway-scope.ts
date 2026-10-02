@@ -8,7 +8,7 @@ import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-
  * API authorizes against. A run outside that scope has no gateway authority to
  * spend, so it is refused rather than served by ambient credentials.
  */
-export function embeddedRouteRunsInGateway(): boolean {
+function embeddedRouteRunsInGateway(): boolean {
   return Boolean(getPluginRuntimeGatewayRequestScope());
 }
 
