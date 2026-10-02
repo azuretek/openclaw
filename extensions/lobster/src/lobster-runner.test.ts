@@ -381,6 +381,54 @@ describe("createEmbeddedLobsterRunner", () => {
     expect(context?.env?.LOBSTER_LLM_PROVIDER).toBe("openclaw");
   });
 
+  it("forces gateway execution instead of an external replay, and leaves a run without the adapter alone", async () => {
+    vi.stubEnv("OPENCLAW_URL", "http://127.0.0.1:1/");
+    vi.stubEnv("CLAWD_URL", undefined);
+    vi.stubEnv("LOBSTER_LLM_PROVIDER", undefined);
+    vi.stubEnv("LOBSTER_PI_LLM_ADAPTER_URL", undefined);
+    vi.stubEnv("LOBSTER_LLM_ADAPTER_URL", undefined);
+    vi.stubEnv("LOBSTER_LLM_FORCE_REFRESH", undefined);
+
+    // A workflow with its own route keeps Lobster's existing behaviour, saved
+    // result reuse included.
+    const withRoute = {
+      runToolRequest: vi.fn<Runtime["runToolRequest"]>().mockResolvedValue(success),
+      resumeToolRequest: vi.fn<Runtime["resumeToolRequest"]>(),
+    };
+    await createEmbeddedLobsterRunner({
+      loadRuntime: vi.fn().mockResolvedValue(withRoute),
+      llmAdapters: { embedded: { source: "openclaw-embedded", invoke: vi.fn() } },
+    }).run(runParams());
+    const routed = withRoute.runToolRequest.mock.calls[0]?.[0].ctx;
+    expect(routed?.env?.LOBSTER_LLM_PROVIDER).toBe("openclaw");
+    expect(routed?.env?.LOBSTER_LLM_FORCE_REFRESH).toBeUndefined();
+
+    // With no route of its own the run can only reach the embedded route, which
+    // must be executed by the gateway rather than replayed.
+    vi.stubEnv("OPENCLAW_URL", undefined);
+    const embeddedOnly = {
+      runToolRequest: vi.fn<Runtime["runToolRequest"]>().mockResolvedValue(success),
+      resumeToolRequest: vi.fn<Runtime["resumeToolRequest"]>(),
+    };
+    await createEmbeddedLobsterRunner({
+      loadRuntime: vi.fn().mockResolvedValue(embeddedOnly),
+      llmAdapters: { embedded: { source: "openclaw-embedded", invoke: vi.fn() } },
+    }).run(runParams());
+    const supplied = embeddedOnly.runToolRequest.mock.calls[0]?.[0].ctx;
+    expect(supplied?.env?.LOBSTER_LLM_FORCE_REFRESH).toBe("1");
+
+    vi.stubEnv("OPENCLAW_URL", "http://127.0.0.1:1/");
+    const withoutAdapter = {
+      runToolRequest: vi.fn<Runtime["runToolRequest"]>().mockResolvedValue(success),
+      resumeToolRequest: vi.fn<Runtime["resumeToolRequest"]>(),
+    };
+    await createEmbeddedLobsterRunner({
+      loadRuntime: vi.fn().mockResolvedValue(withoutAdapter),
+    }).run(runParams());
+    const untouched = withoutAdapter.runToolRequest.mock.calls[0]?.[0].ctx;
+    expect(untouched?.env?.LOBSTER_LLM_FORCE_REFRESH).toBeUndefined();
+  });
+
   it("does not pin a provider when no in-process adapter is registered", async () => {
     vi.stubEnv("OPENCLAW_URL", "http://127.0.0.1:1/");
     vi.stubEnv("LOBSTER_LLM_PROVIDER", undefined);

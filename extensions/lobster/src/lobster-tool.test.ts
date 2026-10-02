@@ -6,10 +6,18 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin from "../index.js";
+import * as lobsterGatewayScope from "./lobster-gateway-scope.js";
 import * as lobsterRunner from "./lobster-runner.js";
 import { createLobsterTool } from "./lobster-tool.js";
 
 afterEach(() => vi.unstubAllEnvs());
+
+// A real request always carries the gateway request scope, which the host binds.
+// Stub the guard here so these adapter tests stay about the adapter, and cover the
+// real guard in lobster-gateway-scope.test.ts.
+const gatewayScopeSpy = vi
+  .spyOn(lobsterGatewayScope, "assertEmbeddedRouteRunsInGateway")
+  .mockImplementation(() => {});
 
 function fakeApi(overrides: Partial<OpenClawPluginApi> = {}): OpenClawPluginApi {
   return createTestPluginApi({
@@ -81,6 +89,7 @@ describe("lobster plugin tool", () => {
       };
       const signal = new AbortController().signal;
       const result = await adapter.invoke({
+        args: { provider: "embedded" },
         payload: {
           prompt: "Classify this synthetic item",
           artifacts: [{ kind: "text", text: "Picture day Thursday" }],
@@ -145,6 +154,7 @@ describe("lobster plugin tool", () => {
           throw new Error("expected an OpenClaw LLM adapter");
         }
         const result = adapter.invoke({
+          args: { provider: "embedded" },
           payload: { prompt: "Return JSON", outputSchema: { type: ["object", "null"] } },
         });
         if (text === "null") {
@@ -180,12 +190,55 @@ describe("lobster plugin tool", () => {
       }
       await expect(
         adapter.invoke({
+          args: { provider: "embedded" },
           payload: { prompt: "Classify this synthetic item", model: "openai/blocked-model" },
         }),
       ).rejects.toBe(denied);
       expect(complete).toHaveBeenCalledWith(
         expect.objectContaining({ model: "openai/blocked-model" }),
       );
+    } finally {
+      runnerFactory.mockRestore();
+    }
+  });
+
+  it("requires an explicit embedded route and refuses a provider-omitted step", async () => {
+    const complete = vi.fn().mockResolvedValue({ text: '{"category":"synthetic"}' });
+    const runtime = {
+      version: "test",
+      llm: { complete },
+    } as unknown as OpenClawPluginApi["runtime"];
+    const runnerFactory = vi
+      .spyOn(lobsterRunner, "createEmbeddedLobsterRunner")
+      .mockReturnValue({ run: vi.fn() });
+    try {
+      createLobsterTool(fakeApi({ runtime }));
+      const adapter = runnerFactory.mock.calls[0]?.[0]?.llmAdapters?.embedded;
+      if (!adapter) {
+        throw new Error("expected an OpenClaw LLM adapter");
+      }
+
+      // A step that omits --provider reaches this adapter through Lobster's
+      // sole-adapter fallback, which is not an explicit opt-in, so it must be
+      // refused rather than served by the ambient owner's credentials.
+      await expect(
+        adapter.invoke({
+          args: { prompt: "Classify this synthetic item" },
+          payload: { prompt: "Classify this synthetic item" },
+        }),
+      ).rejects.toThrow("opt-in");
+      expect(complete).not.toHaveBeenCalled();
+
+      // Naming the route in the workflow environment stays a valid opt-in.
+      await expect(
+        adapter.invoke({
+          env: { LOBSTER_LLM_PROVIDER: "embedded" },
+          payload: { prompt: "Classify this synthetic item" },
+        }),
+      ).resolves.toBeDefined();
+      expect(complete).toHaveBeenCalledTimes(1);
+      // The gateway scope validation runs before host inference is spent.
+      expect(gatewayScopeSpy).toHaveBeenCalled();
     } finally {
       runnerFactory.mockRestore();
     }

@@ -3,6 +3,7 @@ import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { jsonResult } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
+import { assertEmbeddedRouteRunsInGateway } from "./lobster-gateway-scope.js";
 import {
   createEmbeddedLobsterRunner,
   resolveLobsterCwd,
@@ -29,10 +30,46 @@ function stripJsonCodeFences(text: string): string {
   return match?.[1]?.trim() ?? trimmed;
 }
 
+/**
+ * The embedded route is opt-in, and Lobster resolves a sole registered direct
+ * adapter before its environment auto-detect. A workflow step that omits
+ * `--provider` therefore reaches this adapter even when no routing variable is
+ * set, where the same request used to be rejected as unresolved routing. Require
+ * the embedded route to have been chosen explicitly, by the step's `--provider`
+ * or by `LOBSTER_LLM_PROVIDER` in the workflow environment.
+ */
+function embeddedRouteWasRequested(params: {
+  env?: Record<string, string | undefined>;
+  args?: Record<string, unknown>;
+}): boolean {
+  const stepProvider =
+    typeof params.args?.provider === "string" ? params.args.provider.trim().toLowerCase() : "";
+  if (stepProvider) {
+    return stepProvider === "embedded";
+  }
+  return (params.env?.LOBSTER_LLM_PROVIDER ?? "").trim().toLowerCase() === "embedded";
+}
+
 function createOpenClawLlmAdapter(api: OpenClawPluginApi) {
   return {
     source: "openclaw-embedded",
-    async invoke({ payload, signal }: { payload: unknown; signal?: AbortSignal }) {
+    async invoke({
+      env,
+      args,
+      payload,
+      signal,
+    }: {
+      env?: Record<string, string | undefined>;
+      args?: Record<string, unknown>;
+      payload: unknown;
+      signal?: AbortSignal;
+    }) {
+      if (!embeddedRouteWasRequested({ env, args })) {
+        throw new Error(
+          "lobster llm.invoke has no route: the embedded provider is opt-in, so pass --provider embedded or set LOBSTER_LLM_PROVIDER=embedded",
+        );
+      }
+      assertEmbeddedRouteRunsInGateway();
       if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
         throw new Error("Lobster LLM payload must be an object");
       }
